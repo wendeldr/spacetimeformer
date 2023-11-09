@@ -36,6 +36,8 @@ class CSVTimeSeries:
             "weekday",
             "hour",
             "minute",
+            "second",
+            "millisecond",
         ],
     ):
 
@@ -68,7 +70,7 @@ class CSVTimeSeries:
         try:
             time_df = pd.to_datetime(raw_df[self.time_col_name], format="%Y-%m-%d %H:%M")
         except ValueError:
-            time_df = pd.to_datetime(raw_df[self.time_col_name], format="%Y-%m-%d %H:%M:%S")
+            time_df = pd.to_datetime(raw_df[self.time_col_name])
         df = stf.data.timefeatures.time_features(
             time_df,
             raw_df,

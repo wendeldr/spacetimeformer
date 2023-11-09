@@ -323,12 +323,12 @@ class Spacetimeformer_Forecaster(stf.Forecaster):
             init_lr=self.init_lr,
             peak_lr=self.base_lr,
             warmup_steps=self.warmup_steps,
-            patience=3,
+            patience=10,
             factor=self.decay_factor,
         )
         scheduler = {
                 'scheduler': self.scheduler,
-                'monitor': 'val_loss',  # Here 'val_loss' is the name of the metric you wish to monitor.
+                'monitor': 'val/mape',  #Available metrics are: ['train/mape', 'train/mae', 'train/mse', 'train/smape', 'train/norm_mae', 'train/norm_mse', 'train/forecast_loss', 'train/class_loss', 'train/recon_loss', 'train/loss', 'train/acc', 'val/mape', 'val/mae', 'val/mse', 'val/smape', 'val/norm_mae', 'val/norm_mse', 'val/forecast_loss', 'val/class_loss', 'val/recon_loss', 'val/loss', 'val/acc'
             }
         return {'optimizer': self.optimizer, 'lr_scheduler': scheduler}
 

@@ -4,6 +4,8 @@ import sys
 import warnings
 import os
 import uuid
+import pandas as pd
+import numpy as np
 
 import pytorch_lightning as pl
 import torch
@@ -32,6 +34,8 @@ _DSETS = [
     "monash",
     "hangzhou",
     "traffic",
+    "eeg",
+    "fast"
 ]
 
 
@@ -133,7 +137,7 @@ def create_model(config):
         yc_dim = 49
         yt_dim = 49
     elif config.dset == "asos":
-        x_dim = 6
+        x_dim = 5
         yc_dim = 6
         yt_dim = 6
     elif config.dset == "solar_energy":
@@ -192,6 +196,14 @@ def create_model(config):
         x_dim = 2
         yc_dim = 862
         yt_dim = 862
+    elif config.dset == "eeg":
+        x_dim = 3
+        yc_dim = 162
+        yt_dim = 162
+    elif config.dset == "fast":
+        x_dim = 2
+        yc_dim = 6
+        yt_dim = 6
     assert x_dim is not None
     assert yc_dim is not None
     assert yt_dim is not None
@@ -608,6 +620,83 @@ def create_dset(config):
         NULL_VAL = None
         PLOT_VAR_NAMES = ["OT", "p (mbar)", "raining (s)"]
         PLOT_VAR_IDXS = [20, 0, 15]
+
+    elif config.dset == "eeg":
+        dset = stf.data.CSVTimeSeries(
+            data_path="/media/dan/Data/git/spacetimeformer/spacetimeformer/data/eeg_full.csv",
+            val_split=0.2,
+            test_split=0.2,
+            time_col_name="datetime",
+            time_features=["minute", "second", "millisecond"],
+        )
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
+    elif config.dset == "fast":
+        # fast dataset for debugging
+        fs = 250  # sampling rate (Hz)
+        T = 10  # length of epochs (s)
+        f = 10  # frequency of sinusoids (Hz)
+        t = np.arange(0, T, 1 / fs)
+        A = 1  # noise amplitude
+        sigma = 0.1  # Gaussian noise variance
+
+        data = []
+
+        phase_differences = [0, -np.pi, -np.pi / 2, 0, np.pi / 2, np.pi]
+        for i, ps in enumerate(phase_differences):
+            # set random seed for reproducibility
+            np.random.seed(i)
+            sig = np.sin(2 * np.pi * f * t - ps) + A * np.random.normal(0, sigma, size=t.shape)
+            data.append(sig)
+
+        data = np.array(data).T
+
+        PLOT_VAR_NAMES = ['0', '-pi', '-pi/2', 'zero', 'pi/2', 'pi']
+        PLOT_VAR_IDXS = [0, 1, 2, 3, 4, 5]
+
+        df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
+
+        # add datetime column
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="D")
+        dset = stf.data.CSVTimeSeries(
+            data_path=None,
+            raw_df=df,
+            target_cols=PLOT_VAR_NAMES,
+            ignore_cols=[],
+            val_split=0.2,
+            test_split=0.2,
+            normalize=True,
+            time_col_name="Datetime",
+            time_features=["year", "day"],
+        )
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
     else:
         time_col_name = "Datetime"
         data_path = config.data_path
@@ -616,6 +705,7 @@ def create_dset(config):
             if data_path == "auto":
                 data_path = "./data/temperature-v1.csv"
             target_cols = ["ABI", "AMA", "ACT", "ALB", "JFK", "LGA"]
+            time_features = time_features[:-1]
         elif config.dset == "solar_energy":
             if data_path == "auto":
                 data_path = "./data/solar_AL_converted.csv"
@@ -740,8 +830,11 @@ def main(args):
     if args.wandb:
         import wandb
 
-        project = os.getenv("STF_WANDB_PROJ")
-        entity = os.getenv("STF_WANDB_ACCT")
+        if args.dset == "":
+            project = "default"
+        else:
+            project = args.dset
+        entity = "ponderingparameters"
         assert (
             project is not None and entity is not None
         ), "Please set environment variables `STF_WANDB_ACCT` and `STF_WANDB_PROJ` with \n\
@@ -840,8 +933,10 @@ def main(args):
         gradient_clip_algorithm="norm",
         overfit_batches=20 if args.debug else 0,
         accumulate_grad_batches=args.accumulate,
-        sync_batchnorm=True,
+        sync_batchnorm=False,
         limit_val_batches=args.limit_val_batches,
+        max_epochs=10000,
+        log_every_n_steps=1,
         **val_control,
     )
 

@@ -4,7 +4,7 @@ import pandas as pd
 def time_features(
     dates,
     main_df=None,
-    use_features=["year", "month", "day", "weekday", "hour", "minute"],
+    use_features=["year", "month", "day", "weekday", "hour", "minute","second","millisecond"],
     time_col_name="Datetime",
 ):
     if main_df is None:
@@ -36,6 +36,15 @@ def time_features(
         main_df["Minute"] = dates.apply(
             lambda row: 2.0 * ((row.minute) / 59.0) - 1.0, 1
         )
+    if "second" in use_features:
+        main_df["Second"] = dates.apply(
+            lambda row: 2.0 * ((row.second) / 59.0) - 1.0, 1
+        )
+    if "millisecond" in use_features:
+        main_df["Millisecond"] = dates.apply(
+            lambda row: 2.0 * ((row.microsecond / 1000.0) / 999.0) - 1.0, 1
+        )
+
 
     main_df[time_col_name] = dates
     return main_df

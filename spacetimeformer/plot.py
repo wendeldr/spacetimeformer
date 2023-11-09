@@ -39,19 +39,21 @@ def plot(x_c, y_c, x_t, y_t, idx, title, preds, pad_val=None, conf=None):
     xaxis_t = np.arange(len(y_c), len(y_c) + len(y_t))
     context = pd.DataFrame({"xaxis_c": xaxis_c, "y_c": y_c})
     target = pd.DataFrame({"xaxis_t": xaxis_t, "y_t": y_t, "pred": preds})
-    sns.lineplot(data=context, x="xaxis_c", y="y_c", label="Context", linewidth=5.8)
+    sns.lineplot(data=context, x="xaxis_c", y="y_c", label="Context", linewidth=1)
     ax.scatter(
         x=target["xaxis_t"], y=target["y_t"], c="grey", label="True", linewidth=1.0
     )
-    sns.lineplot(data=target, x="xaxis_t", y="pred", label="Forecast", linewidth=5.9)
+    sns.lineplot(data=target, x="xaxis_t", y="pred", label="Forecast", linewidth=1)
     if conf is not None:
         conf = conf[..., idx]
         ax.fill_between(
             xaxis_t, (preds - conf), (preds + conf), color="orange", alpha=0.1
         )
-    ax.legend(loc="upper left", prop={"size": 12})
+
+    ax.legend()
+    # ax.legend(loc="upper left", prop={"size": 12})
     # ax.set_facecolor("#f0f0f0")
-    ax.set_xticks([])
+    # ax.set_xticks([])
     ax.set_xlabel("")
     ax.set_ylabel("")
     ax.set_title(title)
@@ -92,6 +94,14 @@ class PredictionPlotterCallback(pl.Callback):
         self.imgs = None
 
     def on_validation_end(self, trainer, model):
+
+        if self.test_data[0].shape[0] < self.total_samples:
+            # sample a 1/4 of the data to reduce time
+            one_fourth = self.test_data[0].shape[0] // 4
+            if one_fourth <= 0:
+                one_fourth = 1
+            self.total_samples = one_fourth
+
         idxs = [random.sample(range(self.test_data[0].shape[0]), k=self.total_samples)]
         x_c, y_c, x_t, y_t = [i[idxs].detach().to(model.device) for i in self.test_data]
         with torch.no_grad():
@@ -236,6 +246,13 @@ class AttentionMatrixCallback(pl.Callback):
         self.layer = layer
 
     def _get_attns(self, model):
+        if self.test_data[0].shape[0] < self.total_samples:
+            # sample a 1/4 of the data to reduce time
+            one_fourth = self.test_data[0].shape[0] // 4
+            if one_fourth <= 0:
+                one_fourth = 1
+            self.total_samples = one_fourth
+
         idxs = [random.sample(range(self.test_data[0].shape[0]), k=self.total_samples)]
         x_c, y_c, x_t, y_t = [i[idxs].detach().to(model.device) for i in self.test_data]
         enc_attns, dec_attns = None, None
@@ -281,7 +298,6 @@ class AttentionMatrixCallback(pl.Callback):
                 a_head = attns.sum(0)
             else:
                 a_head = attns[head]
-
             a_head /= torch.max(a_head, dim=-1)[0].unsqueeze(1)
 
             imgs.append(
@@ -295,6 +311,22 @@ class AttentionMatrixCallback(pl.Callback):
                 )
             )
         return imgs
+
+    def _img_matrixs(self, attns):
+        heads = [i for i in range(attns.shape[0])] + ["avg", "sum"]
+        matrixs = []
+        for head in heads:
+            if head == "avg":
+                a_head = attns.mean(0)
+            elif head == "sum":
+                a_head = attns.sum(0)
+            else:
+                a_head = attns[head]
+
+            # save numpy array to wandb
+            matrixs.append(a_head.cpu().numpy())
+
+        return matrixs
 
     def _pos_sim_scores(self, embedding, seq_len, device):
         if embedding.position_emb == "t2v":
@@ -321,6 +353,21 @@ class AttentionMatrixCallback(pl.Callback):
             trainer.logger.experiment.log(
                 {"test/self_attn": self_attn_imgs, "global_step": trainer.global_step}
             )
+            matrixs = self._img_matrixs(self_attns)
+            for i in range(len(matrixs)):
+                name = i
+                if i == len(matrixs) - 2:
+                    name = "avg"
+                elif i == len(matrixs) - 1:
+                    name = "sum"
+                # save to local numpy file
+                np.save(
+                    os.path.join(
+                        trainer.logger.experiment.dir,
+                        f"self_attn_{trainer.global_step}_layer_{self.layer}_head_{name}.npy",
+                    ),
+                    matrixs[i],
+                )
         if cross_attns is not None:
             cross_attn_imgs = self._make_imgs(
                 cross_attns, f"Cross Attn, Layer {self.layer},"
