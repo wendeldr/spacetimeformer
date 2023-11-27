@@ -202,8 +202,8 @@ def create_model(config):
         yt_dim = 162
     elif config.dset == "fast":
         x_dim = 2
-        yc_dim = 6
-        yt_dim = 6
+        yc_dim = 8
+        yt_dim = 8
     assert x_dim is not None
     assert yc_dim is not None
     assert yt_dim is not None
@@ -646,26 +646,38 @@ def create_dset(config):
         NULL_VAL = None
     elif config.dset == "fast":
         # fast dataset for debugging
-        fs = 250  # sampling rate (Hz)
+        fs = 2048  # sampling rate (Hz)
         T = 10  # length of epochs (s)
-        f = 10  # frequency of sinusoids (Hz)
+        f = 100  # frequency of sinusoids (Hz)
         t = np.arange(0, T, 1 / fs)
         A = 1  # noise amplitude
         sigma = 0.1  # Gaussian noise variance
 
         data = []
 
-        phase_differences = [0, -np.pi, -np.pi / 2, 0, np.pi / 2, np.pi]
+        fs = 2048  # sampling rate (Hz)
+        T = 10  # length of epochs (s)
+        f = 100  # frequency of sinusoids (Hz)
+        t = np.arange(0, T, 1 / fs)
+        A = 1  # noise amplitude
+        sigma = 0.1  # Gaussian noise variance
+
+        data = []
+        # phase diffs around unit circle
+        phase_differences = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4, np.pi, 5 * np.pi / 4, 3 * np.pi / 2, 7 * np.pi / 4]
+        names = ['0 (0°)', 'π/4 (45°)', 'π/2 (90°)', '3π/4 (135°)', 'π (180°)', '5π/4 (225°)', '3π/2 (270°)',
+                 '7π/4 (315°)']
         for i, ps in enumerate(phase_differences):
             # set random seed for reproducibility
             np.random.seed(i)
-            sig = np.sin(2 * np.pi * f * t - ps) + A * np.random.normal(0, sigma, size=t.shape)
+            # sig = np.sin(2 * np.pi * f * t - ps) + A * np.random.normal(0, sigma, size=t.shape)
+            sig = np.sin(2 * np.pi * f * t - ps)
             data.append(sig)
 
         data = np.array(data).T
 
-        PLOT_VAR_NAMES = ['0', '-pi', '-pi/2', 'zero', 'pi/2', 'pi']
-        PLOT_VAR_IDXS = [0, 1, 2, 3, 4, 5]
+        PLOT_VAR_NAMES = names
+        PLOT_VAR_IDXS = np.arange(0,len(names))
 
         df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
 

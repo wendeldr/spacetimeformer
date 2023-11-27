@@ -172,11 +172,11 @@ class Embedding(nn.Module):
         elif self.position_emb == "abs":
             # lookup pos emb
             local_emb = self.local_emb(local_pos.long())
-
         # time emb
         if not self.use_time:
             x = torch.zeros_like(x)
         x = torch.nan_to_num(x)
+        # repeat time emb to match y (a flat sequence of length x dim)
         x = repeat(x, f"batch len x_dim -> batch ({dy} len) x_dim")
         time_emb = self.time_emb(x)
 
