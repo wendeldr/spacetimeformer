@@ -35,7 +35,8 @@ _DSETS = [
     "hangzhou",
     "traffic",
     "eeg",
-    "fast"
+    "clean_phaseshifted",
+    "three_simple_waves"
 ]
 
 
@@ -45,7 +46,7 @@ def create_parser():
 
     # Throw error now before we get confusing parser issues
     assert (
-        model in _MODELS
+            model in _MODELS
     ), f"Unrecognized model (`{model}`). Options include: {_MODELS}"
     assert dset in _DSETS, f"Unrecognized dset (`{dset}`). Options include: {_DSETS}"
 
@@ -122,8 +123,7 @@ def create_parser():
     return parser
 
 
-def create_model(config):
-    x_dim, yc_dim, yt_dim = None, None, None
+def create_model(config, x_dim=None, yc_dim=None, yt_dim=None):
     if config.dset == "metr-la":
         x_dim = 2
         yc_dim = 207
@@ -137,7 +137,7 @@ def create_model(config):
         yc_dim = 49
         yt_dim = 49
     elif config.dset == "asos":
-        x_dim = 5
+        x_dim = 6
         yc_dim = 6
         yt_dim = 6
     elif config.dset == "solar_energy":
@@ -200,10 +200,7 @@ def create_model(config):
         x_dim = 3
         yc_dim = 162
         yt_dim = 162
-    elif config.dset == "fast":
-        x_dim = 2
-        yc_dim = 8
-        yt_dim = 8
+
     assert x_dim is not None
     assert yc_dim is not None
     assert yt_dim is not None
@@ -392,7 +389,7 @@ def create_model(config):
     return forecaster
 
 
-def create_dset(config):
+def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
     INV_SCALER = lambda x: x
     SCALER = lambda x: x
     NULL_VAL = None
@@ -403,7 +400,7 @@ def create_dset(config):
     if config.dset == "metr-la" or config.dset == "pems-bay":
         if config.dset == "pems-bay":
             assert (
-                "pems_bay" in config.data_path
+                    "pems_bay" in config.data_path
             ), "Make sure to switch to the pems-bay file!"
         data = stf.data.metr_la.METR_LA_Data(config.data_path)
         DATA_MODULE = stf.data.DataModule(
@@ -644,17 +641,8 @@ def create_dset(config):
         INV_SCALER = dset.reverse_scaling
         SCALER = dset.apply_scaling
         NULL_VAL = None
-    elif config.dset == "fast":
-        # fast dataset for debugging
-        fs = 2048  # sampling rate (Hz)
-        T = 10  # length of epochs (s)
-        f = 100  # frequency of sinusoids (Hz)
-        t = np.arange(0, T, 1 / fs)
-        A = 1  # noise amplitude
-        sigma = 0.1  # Gaussian noise variance
-
-        data = []
-
+    elif config.dset == "clean_phaseshifted":
+        # clean_phaseshifted dataset for debugging
         fs = 2048  # sampling rate (Hz)
         T = 10  # length of epochs (s)
         f = 100  # frequency of sinusoids (Hz)
@@ -675,9 +663,11 @@ def create_dset(config):
             data.append(sig)
 
         data = np.array(data).T
+        yc_dim = data.shape[1]
+        yt_dim = data.shape[1]
 
         PLOT_VAR_NAMES = names
-        PLOT_VAR_IDXS = np.arange(0,len(names))
+        PLOT_VAR_IDXS = np.arange(0, len(names))
 
         df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
 
@@ -709,6 +699,93 @@ def create_dset(config):
         INV_SCALER = dset.reverse_scaling
         SCALER = dset.apply_scaling
         NULL_VAL = None
+
+        x_dim = dset.time_cols.shape[0]
+
+    elif config.dset == "three_simple_waves":
+        # # wave 1 = flat
+        # # wave 2 = linear increase
+        # # wave 3 = exponential decrease
+        # # time is same sampling for all waves
+        # length = 10000
+        # time = np.arange(0, length, 1)
+        # wave1 = np.zeros(time.shape)
+        # wave2 = time
+        # wave3 = np.exp(-time)
+        # data = np.vstack((wave1, wave2, wave3)).T
+        # yc_dim = data.shape[1]
+        # yt_dim = data.shape[1]
+        # names = ['flat', 'linear', 'exp-decrease']
+
+
+        fs = 2048  # sampling rate (Hz)
+        T = 10  # length of epochs (s)
+        f = 100  # frequency of sinusoids (Hz)
+        t = np.arange(0, T, 1 / fs)
+        A = 1  # Amplitude
+        sigma = 0.1  # Gaussian noise variance
+
+        # Damping/growth factor
+        k = 0.1
+
+        # Initializing the data array
+        data = []
+
+        # Phase differences for the sine waves
+        phase_differences = [0, np.pi]
+        names = ['0 (0°)', 'π (180°)']
+
+        # Append dampened sine wave
+        dampened_wave = A * np.exp(-k * t) * np.sin(2 * np.pi * f * t)
+        data.append(dampened_wave)
+
+        # Append standard and phase-shifted sine waves
+        for ps in phase_differences:
+            # Create the sine wave with phase shift
+            sig = np.sin(2 * np.pi * f * t - ps)
+            data.append(sig)
+
+        data = np.array(data).T
+        # Update names for the new waves
+        names.insert(0, "Dampened")
+
+        PLOT_VAR_NAMES = names
+        PLOT_VAR_IDXS = np.arange(0, len(names))
+
+        df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="D")
+
+        dset = stf.data.CSVTimeSeries(
+            data_path=None,
+            raw_df=df,
+            target_cols=PLOT_VAR_NAMES,
+            ignore_cols=[],
+            val_split=0.2,
+            test_split=0.2,
+            normalize=True,
+            time_col_name="Datetime",
+            time_features=["day"],
+        )
+        yc_dim = data.shape[1]
+        yt_dim = data.shape[1]
+        x_dim = dset.time_cols.shape[0]
+
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
+
     else:
         time_col_name = "Datetime"
         data_path = config.data_path
@@ -717,7 +794,6 @@ def create_dset(config):
             if data_path == "auto":
                 data_path = "./data/temperature-v1.csv"
             target_cols = ["ABI", "AMA", "ACT", "ALB", "JFK", "LGA"]
-            time_features = time_features[:-1]
         elif config.dset == "solar_energy":
             if data_path == "auto":
                 data_path = "./data/solar_AL_converted.csv"
@@ -782,6 +858,9 @@ def create_dset(config):
         PLOT_VAR_IDXS,
         PLOT_VAR_NAMES,
         PAD_VAL,
+        x_dim,
+        yc_dim,
+        yt_dim
     )
 
 
@@ -829,6 +908,7 @@ def create_callbacks(config, save_dir):
     return callbacks
 
 
+# noinspection PyTypeChecker
 def main(args):
     log_dir = os.getenv("STF_LOG_DIR")
     if log_dir is None:
@@ -848,7 +928,7 @@ def main(args):
             project = args.dset
         entity = "ponderingparameters"
         assert (
-            project is not None and entity is not None
+                project is not None and entity is not None
         ), "Please set environment variables `STF_WANDB_ACCT` and `STF_WANDB_PROJ` with \n\
             your wandb user/organization name and project title, respectively."
         experiment = wandb.init(
@@ -875,12 +955,15 @@ def main(args):
         plot_var_idxs,
         plot_var_names,
         pad_val,
+        x_dim,
+        yc_dim,
+        yt_dim
     ) = create_dset(args)
 
     # Model
     args.null_value = null_val
     args.pad_value = pad_val
-    forecaster = create_model(args)
+    forecaster = create_model(args, x_dim=x_dim, yc_dim=yc_dim, yt_dim=yt_dim)
     forecaster.set_inv_scaler(inv_scaler)
     forecaster.set_scaler(scaler)
     forecaster.set_null_value(null_val)
@@ -918,7 +1001,6 @@ def main(args):
         )
 
     if args.wandb and args.model == "spacetimeformer" and args.attn_plot:
-
         callbacks.append(
             stf.plot.AttentionMatrixCallback(
                 test_samples,
@@ -931,15 +1013,50 @@ def main(args):
         config.update(args)
         logger.log_hyperparams(config)
 
+    if args.model == "spacetimeformer" and args.attn_plot and not args.wandb:
+        import wandb
+        experiment = wandb.init(
+            config=args,
+            dir=log_dir,
+            reinit=True,
+            mode="offline",
+        )
+        config = wandb.config
+        wandb.run.name = args.run_name
+        wandb.run.save()
+        logger = pl.loggers.WandbLogger(
+            experiment=experiment,
+            save_dir=log_dir,
+        )
+        callbacks.append(
+            stf.plot.AttentionMatrixCallback_SANSWANDB(
+                test_samples,
+                layer=0,
+                total_samples=min(16, args.batch_size),
+                context_points=args.context_points,
+                y_dim=forecaster.d_yc,
+                col_divider_width=2,
+                row_divider_width=10,
+            )
+        )
+
     if args.val_check_interval <= 1.0:
         val_control = {"val_check_interval": args.val_check_interval}
     else:
         val_control = {"check_val_every_n_epoch": int(args.val_check_interval)}
 
+    # init logger
+    if args.wandb:
+        touse = logger
+    elif args.model == "spacetimeformer" and args.attn_plot:
+        touse = logger
+    else:
+        touse = None
+
     trainer = pl.Trainer(
         gpus=args.gpus,
         callbacks=callbacks,
-        logger=logger if args.wandb else None,
+        logger=touse,
         accelerator="dp",
         gradient_clip_val=args.grad_clip_norm,
         gradient_clip_algorithm="norm",
@@ -947,7 +1064,7 @@ def main(args):
         accumulate_grad_batches=args.accumulate,
         sync_batchnorm=False,
         limit_val_batches=args.limit_val_batches,
-        max_epochs=10000,
+        max_epochs=100,
         log_every_n_steps=1,
         **val_control,
     )
