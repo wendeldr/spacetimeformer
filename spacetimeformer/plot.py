@@ -72,18 +72,20 @@ def plot(x_c, y_c, x_t, y_t, idx, title, preds, pad_val=None, conf=None):
 
 class PredictionPlotterCallback(pl.Callback):
     def __init__(
-        self,
-        test_batch,
-        var_idxs=None,
-        var_names=None,
-        pad_val=None,
-        total_samples=4,
-        log_to_wandb=True,
+            self,
+            test_batch,
+            var_idxs=None,
+            var_names=None,
+            pad_val=None,
+            total_samples=4,
+            log_to_wandb=True,
+            log_to_file=False,
     ):
         self.test_data = test_batch
         self.total_samples = total_samples
         self.pad_val = pad_val
         self.log_to_wandb = log_to_wandb
+        self.log_to_file = log_to_file
 
         if var_idxs is None and var_names is None:
             d_yt = self.test_data[-1].shape[-1]
@@ -138,6 +140,11 @@ class PredictionPlotterCallback(pl.Callback):
             )
         else:
             self.imgs = imgs
+
+        if len(self.imgs) > 0 and self.log_to_file:
+            for i, img in enumerate(self.imgs):
+                cv2.imwrite(os.path.join(trainer.logger.experiment.dir, f"prediction_{trainer.global_step}_{i}.png"),
+                            img)
 
 
 class ImageCompletionCallback(pl.Callback):
@@ -429,9 +436,9 @@ class AttentionMatrixCallback(pl.Callback):
         )
 
 
-
 class AttentionMatrixCallback_SANSWANDB(pl.Callback):
-    def __init__(self, test_batches, layer=0, total_samples=32, context_points=8, row_divider_width=1, col_divider_width=1, y_dim=1):
+    def __init__(self, test_batches, layer=0, total_samples=32, context_points=8, row_divider_width=1,
+                 col_divider_width=1, y_dim=1):
         self.test_data = test_batches
         self.total_samples = total_samples
         self.layer = layer
@@ -591,7 +598,8 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
                 self_attns, f"Self Attn, Layer {self.layer},"
             )
             # save images to local temporarily
-            path = os.path.join(trainer.logger.experiment.dir, f"self_attn_{trainer.global_step}_layer_{self.layer}.svg")
+            path = os.path.join(trainer.logger.experiment.dir,
+                                f"self_attn_{trainer.global_step}_layer_{self.layer}.svg")
             self_attn_imgs[0].savefig(path)
 
             # cv2.imwrite(path, self_attn_imgs[0])

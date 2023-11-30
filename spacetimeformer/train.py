@@ -36,7 +36,8 @@ _DSETS = [
     "traffic",
     "eeg",
     "clean_phaseshifted",
-    "three_simple_waves"
+    "three_simple_waves",
+    "fast"
 ]
 
 
@@ -112,6 +113,7 @@ def create_parser():
     parser.add_argument("--limit_val_batches", type=float, default=1.0)
     parser.add_argument("--no_earlystopping", action="store_true")
     parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--max_epochs", type=int, default=5)
     parser.add_argument(
         "--trials", type=int, default=1, help="How many consecutive trials to run"
     )
@@ -716,10 +718,82 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         # yc_dim = data.shape[1]
         # yt_dim = data.shape[1]
         # names = ['flat', 'linear', 'exp-decrease']
+        fs = 2048  # Sampling rate (Hz)
+        T = 10  # Length of epochs (s)
+        f = 100  # Frequency of sinusoids (Hz)
+        t = np.arange(0, T, 1 / fs)  # Time array
+        A = 1  # Amplitude
+        sigma = 0.1  # Gaussian noise variance
 
+        # Damping/growth factor
+        k = 2
 
-        fs = 2048  # sampling rate (Hz)
-        T = 10  # length of epochs (s)
+        # Number of repetitions
+        N = 10  # Replace with desired number of repetitions
+
+        # Initializing the data array
+        data = []
+
+        # Phase differences for the sine waves
+        phase_differences = [0, np.pi]
+        names = ['0 (0°)', 'π (180°)']
+
+        # Time variable for the repeating dampened wave
+        repeating_t = t % (T / N)
+
+        # Append dampened sine wave (repeating)
+        dampened_wave = A * np.exp(-k * repeating_t) * np.sin(2 * np.pi * f * repeating_t)
+        data.append(dampened_wave)
+
+        # Append standard and phase-shifted sine waves
+        for ps in phase_differences:
+            # Create the sine wave with phase shift
+            sig = np.sin(2 * np.pi * f * t - ps)
+            data.append(sig)
+
+        data = np.array(data).T
+        # Update names for the new waves
+        names.insert(0, "Dampened")
+
+        PLOT_VAR_NAMES = names
+        PLOT_VAR_IDXS = np.arange(0, len(names))
+
+        df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="D")
+
+        dset = stf.data.CSVTimeSeries(
+            data_path=None,
+            raw_df=df,
+            target_cols=PLOT_VAR_NAMES,
+            ignore_cols=[],
+            val_split=0.2,
+            test_split=0.2,
+            normalize=True,
+            time_col_name="Datetime",
+            time_features=["day"],
+        )
+        yc_dim = data.shape[1]
+        yt_dim = data.shape[1]
+        x_dim = dset.time_cols.shape[0]
+
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
+    elif config.dset == "fast":
+        fs = 256  # sampling rate (Hz)
+        T = 2  # length of epochs (s)
         f = 100  # frequency of sinusoids (Hz)
         t = np.arange(0, T, 1 / fs)
         A = 1  # Amplitude
@@ -785,7 +859,6 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         INV_SCALER = dset.reverse_scaling
         SCALER = dset.apply_scaling
         NULL_VAL = None
-
     else:
         time_col_name = "Datetime"
         data_path = config.data_path
@@ -1013,7 +1086,7 @@ def main(args):
         config.update(args)
         logger.log_hyperparams(config)
 
-    if args.model == "spacetimeformer" and args.attn_plot and not args.wandb:
+    if args.model == "spacetimeformer" and (args.attn_plot or args.plot) and not args.wandb:
         import wandb
         experiment = wandb.init(
             config=args,
@@ -1028,17 +1101,30 @@ def main(args):
             experiment=experiment,
             save_dir=log_dir,
         )
-        callbacks.append(
-            stf.plot.AttentionMatrixCallback_SANSWANDB(
-                test_samples,
-                layer=0,
-                total_samples=min(16, args.batch_size),
-                context_points=args.context_points,
-                y_dim=forecaster.d_yc,
-                col_divider_width=2,
-                row_divider_width=10,
+        if args.attn_plot:
+            callbacks.append(
+                stf.plot.AttentionMatrixCallback_SANSWANDB(
+                    test_samples,
+                    layer=0,
+                    total_samples=min(16, args.batch_size),
+                    context_points=args.context_points,
+                    y_dim=forecaster.d_yc,
+                    col_divider_width=2,
+                    row_divider_width=10,
+                )
             )
-        )
+        if args.plot:
+            callbacks.append(
+                stf.plot.PredictionPlotterCallback(
+                    test_samples,
+                    var_idxs=plot_var_idxs,
+                    var_names=plot_var_names,
+                    pad_val=pad_val,
+                    total_samples=min(args.plot_samples, args.batch_size),
+                    log_to_wandb=False,
+                    log_to_file=True,
+                )
+            )
 
     if args.val_check_interval <= 1.0:
         val_control = {"val_check_interval": args.val_check_interval}
@@ -1064,7 +1150,7 @@ def main(args):
         accumulate_grad_batches=args.accumulate,
         sync_batchnorm=False,
         limit_val_batches=args.limit_val_batches,
-        max_epochs=100,
+        max_epochs=args.max_epochs,
         log_every_n_steps=1,
         **val_control,
     )
