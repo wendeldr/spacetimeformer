@@ -45,6 +45,16 @@ def time_features(
             lambda row: 2.0 * ((row.microsecond / 1000.0) / 999.0) - 1.0, 1
         )
 
+    if "microsecond" in use_features:
+        main_df["Microsecond"] = dates.apply(
+            lambda row: 2.0 * (row.microsecond / 999999.0) - 1.0, 1
+        )
+
+    if "nanosecond" in use_features:
+        main_df["Nanosecond"] = dates.apply(
+            lambda row: 2.0 * (row.nanosecond / 999999999.0) - 1.0, 1
+        )
+
 
     main_df[time_col_name] = dates
     return main_df

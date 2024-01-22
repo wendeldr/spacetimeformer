@@ -176,8 +176,8 @@ class Embedding(nn.Module):
         if not self.use_time:
             x = torch.zeros_like(x)
         x = torch.nan_to_num(x)
-        # repeat time emb to match y (a flat sequence of length x dim)
-        x = repeat(x, f"batch len x_dim -> batch ({dy} len) x_dim")
+        # repeat time emb to match y (a flat sequence of length of context * dim)
+        x = repeat(x, f"batch context x_dim -> batch ({dy} context) x_dim")
         time_emb = self.time_emb(x)
 
         # protect against NaNs in y, but keep track for Given emb
@@ -193,7 +193,7 @@ class Embedding(nn.Module):
         y = Flatten(y)
         mask = self.make_mask(y)
 
-        # concat time_emb, y --> FF --> val_time_emb
+        # concat (time_emb, y) --> FF --> val_time_emb
         val_time_inp = torch.cat((time_emb, y), dim=-1)
         val_time_emb = self.val_time_emb(val_time_inp)
 

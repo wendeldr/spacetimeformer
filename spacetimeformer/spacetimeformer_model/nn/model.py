@@ -263,14 +263,14 @@ class Spacetimeformer(nn.Module):
         output_attention=False,
     ):
         # embed context sequence
-        enc_vt_emb, enc_s_emb, enc_var_idxs, enc_mask_seq = self.enc_embedding(
+        enc_valueTime_emb, enc_space_emb, enc_var_idxs, enc_mask_seq = self.enc_embedding(
             y=enc_y, x=enc_x
         )
 
         # encode context sequence
         enc_out, enc_self_attns = self.encoder(
-            val_time_emb=enc_vt_emb,
-            space_emb=enc_s_emb,
+            val_time_emb=enc_valueTime_emb,
+            space_emb=enc_space_emb,
             self_mask_seq=enc_mask_seq,
             output_attn=output_attention,
         )
