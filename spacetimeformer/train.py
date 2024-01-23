@@ -12,6 +12,8 @@ import torch
 
 import spacetimeformer as stf
 
+from connection_complexity.data.raw_data.EDF.edf_helpers import read_edf
+
 _MODELS = ["spacetimeformer", "mtgnn", "heuristic", "lstm", "lstnet", "linear", "s4"]
 
 _DSETS = [
@@ -37,7 +39,8 @@ _DSETS = [
     "eeg",
     "clean_phaseshifted",
     "three_simple_waves",
-    "fast"
+    "fast",
+    "EDF",
 ]
 
 
@@ -55,7 +58,23 @@ def create_parser():
     parser.add_argument("model")
     parser.add_argument("dset")
 
-    if dset == "precip":
+    if dset == "EDF":
+        parser.add_argument("--data_path", type=str, default=None)
+        parser.add_argument("--channels", type=str, default=None)
+
+        parser.add_argument(
+            "--context_points",
+            type=int,
+            default=128,
+            help="number of previous timesteps given to the model in order to make predictions",
+        )
+        parser.add_argument(
+            "--target_points",
+            type=int,
+            default=32,
+            help="number of future timesteps to predict",
+        )
+    elif (dset == "precip"):
         stf.data.precip.GeoDset.add_cli(parser)
         stf.data.precip.CONUS_Precip.add_cli(parser)
     elif dset == "metr-la" or dset == "pems-bay":
@@ -200,8 +219,8 @@ def create_model(config, x_dim=None, yc_dim=None, yt_dim=None):
         yt_dim = 862
     elif config.dset == "eeg":
         x_dim = 3
-        yc_dim = 162
-        yt_dim = 162
+        yc_dim = 6
+        yt_dim = 6
 
     assert x_dim is not None
     assert yc_dim is not None
@@ -622,7 +641,7 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
 
     elif config.dset == "eeg":
         dset = stf.data.CSVTimeSeries(
-            data_path="/media/dan/Data/git/spacetimeformer/spacetimeformer/data/eeg_full.csv",
+            data_path="/media/dan/Data/git/spacetimeformer/realdata.csv",
             val_split=0.2,
             test_split=0.2,
             time_col_name="datetime",
@@ -792,15 +811,18 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         SCALER = dset.apply_scaling
         NULL_VAL = None
     elif config.dset == "fast":
-        fs = 256  # sampling rate (Hz)
-        T = 2  # length of epochs (s)
-        f = 100  # frequency of sinusoids (Hz)
-        t = np.arange(0, T, 1 / fs)
+        fs = 2048  # Sampling rate (Hz)
+        T = 10  # Length of epochs (s)
+        f = 100  # Frequency of sinusoids (Hz)
+        t = np.arange(0, T, 1 / fs)  # Time array
         A = 1  # Amplitude
         sigma = 0.1  # Gaussian noise variance
 
         # Damping/growth factor
-        k = 0.1
+        k = 10
+
+        # Number of repetitions
+        N = 30  # Replace with desired number of repetitions
 
         # Initializing the data array
         data = []
@@ -809,8 +831,11 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         phase_differences = [0, np.pi]
         names = ['0 (0°)', 'π (180°)']
 
-        # Append dampened sine wave
-        dampened_wave = A * np.exp(-k * t) * np.sin(2 * np.pi * f * t)
+        # Time variable for the repeating dampened wave
+        repeating_t = t % (T / N)
+
+        # Append dampened sine wave (repeating)
+        dampened_wave = A * np.exp(-k * repeating_t) * np.sin(2 * np.pi * f * repeating_t)
         data.append(dampened_wave)
 
         # Append standard and phase-shifted sine waves
@@ -851,6 +876,32 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
                 "context_points": config.context_points,
                 "target_points": config.target_points,
                 "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
+
+    elif config.dset == "EDF":
+        edf = read_edf(args.data_path, preload=True)
+        df = edf.to_data_frame(picks=args.channels, time_format='datetime')
+        dset = stf.data.CSVTimeSeries(
+            raw_df=df,
+            val_split=0.2,
+            test_split=0.2,
+            time_col_name="time",
+            time_features=["minute", "second", "microsecond"],
+        )
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": 1,
             },
             batch_size=config.batch_size,
             workers=config.workers,
@@ -983,6 +1034,38 @@ def create_callbacks(config, save_dir):
 
 # noinspection PyTypeChecker
 def main(args):
+    # read edf file. Should probably make a class like the other datasets but this is a quick fix
+    if args.dset == 'EDF':
+        # check data_path argument exists
+        assert args.data_path is not None or args.data_path == '', "Please provide a path to the EDF file using the --data_path argument"
+
+        # check that edf file exists
+        assert os.path.exists(args.data_path), f"EDF file '{args.data_path}' does not exist!"
+
+        edf = read_edf(args.data_path, )
+
+        # check if channels exist. If not use all channels.
+        if args.channels is None or args.channels == '':
+            args.channels = edf.ch_names
+
+        # check if channels are valid
+        # check if list of channels or single channel provided.
+        # if single channel, convert to list
+        # list will be either python list format or just csv string
+        # strip [,] from string
+        potential_list = args.channels.strip('[]')
+        if ',' in potential_list:
+            potential_list = potential_list.split(',')
+        else:
+            potential_list = [potential_list]
+
+        not_overlapping = list(set(potential_list).difference(edf.ch_names))
+        valid_string = ",".join(edf.ch_names)
+        assert len(
+            not_overlapping) == 0, f"Invalid channel name(s) provided.\nValid channels are: {valid_string}\nYou provided these which don't overlap: {not_overlapping}"
+        edf_channels = potential_list
+        args.channels = edf_channels
+
     log_dir = os.getenv("STF_LOG_DIR")
     if log_dir is None:
         log_dir = "./data/STF_LOG_DIR"
@@ -1019,6 +1102,15 @@ def main(args):
             save_dir=log_dir,
         )
 
+    if args.dset == 'EDF':
+        x_dim = 3
+        yc_dim = len(args.channels)
+        yt_dim = len(args.channels)
+    else:
+        x_dim = None
+        yc_dim = None
+        yt_dim = None
+
     # Dset
     (
         data_module,
@@ -1031,7 +1123,7 @@ def main(args):
         x_dim,
         yc_dim,
         yt_dim
-    ) = create_dset(args)
+    ) = create_dset(args, x_dim=x_dim, yc_dim=yc_dim, yt_dim=yt_dim)
 
     # Model
     args.null_value = null_val
@@ -1109,8 +1201,8 @@ def main(args):
                     total_samples=min(16, args.batch_size),
                     context_points=args.context_points,
                     y_dim=forecaster.d_yc,
-                    col_divider_width=2,
-                    row_divider_width=10,
+                    col_divider_width=1,
+                    row_divider_width=1,
                 )
             )
         if args.plot:

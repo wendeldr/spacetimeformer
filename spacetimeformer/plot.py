@@ -448,14 +448,9 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
         self.y_dim = y_dim
 
     def _get_attns(self, model):
-        if self.test_data[0].shape[0] < self.total_samples:
-            # sample a 1/4 of the data to reduce time
-            one_fourth = self.test_data[0].shape[0] // 4
-            if one_fourth <= 0:
-                one_fourth = 1
-            self.total_samples = one_fourth
 
-        idxs = [random.sample(range(self.test_data[0].shape[0]), k=self.total_samples)]
+        self.total_samples = 2
+        idxs = [0] + random.sample(range(self.test_data[0].shape[0]),1)
         x_c, y_c, x_t, y_t = [i[idxs].detach().to(model.device) for i in self.test_data]
         enc_attns, dec_attns = None, None
         # save memory by doing inference 1 example at a time
@@ -481,16 +476,18 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
 
         # re-concat over batch dim, avg over batch dim
         if enc_attns:
-            enc_attns = [torch.cat(a, dim=0) for a in enc_attns][self.layer].mean(0)
+            # enc_attns = [torch.cat(a, dim=0) for a in enc_attns][self.layer].mean(0)
+            enc_attns = [torch.cat(a, dim=0) for a in enc_attns][self.layer]
         else:
             enc_attns = None
         if dec_attns:
-            dec_attns = [torch.cat(a, dim=0) for a in dec_attns][self.layer].mean(0)
+            # dec_attns = [torch.cat(a, dim=0) for a in dec_attns][self.layer].mean(0)
+            dec_attns = [torch.cat(a, dim=0) for a in dec_attns][self.layer]
         else:
             dec_attns = None
-        return enc_attns, dec_attns
+        return enc_attns, dec_attns, idxs
 
-    def _att_image(self, data, title):
+    def _att_image(self, attention, data, title):
         def insert_dividers(self, matrix):
             total_rows, total_cols = matrix.shape
 
@@ -511,51 +508,89 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
 
             return matrix
 
-        num_blocks = self.y_dim
+        # num_blocks = self.y_dim
+        #
+        # # Insert dividers
+        # att_with_dividers = insert_dividers(self, attention)
+        #
+        # # # Plotting
+        # fig, ax = plt.subplots(figsize=(5, 5), dpi=300)
+        # plt.imshow(att_with_dividers, interpolation='nearest', cmap='coolwarm', vmin=0, vmax=1)
+        #
+        # # ticks
+        # x_tick_idx = [self.context_points * i + i * self.col_divider_width for i in range(num_blocks)]
+        # x_tick_labels = [str(i) for i in range(num_blocks)]
+        # y_tick_idx = [self.context_points * i + i * self.row_divider_width for i in range(num_blocks)]
+        # y_tick_labels = [str(i) for i in range(num_blocks)]
+        # plt.xticks(x_tick_idx, x_tick_labels)
+        # plt.yticks(y_tick_idx, y_tick_labels)
+        # plt.tick_params(top=True, right=True, labeltop=True, labelright=True)
+        # plt.title(title)
+        # plt.colorbar()
+        # return fig
+        height = 10
 
-        # Insert dividers
-        att_with_dividers = insert_dividers(self, data)
+        f = plt.figure(figsize=(height, height), dpi=300)
+        gs = plt.GridSpec(self.y_dim + 3, self.y_dim + 3)
+        att_with_dividers = insert_dividers(self, attention)
 
-        # # Plotting
-        fig, ax = plt.subplots(figsize=(5, 5), dpi=300)
-        plt.imshow(att_with_dividers, interpolation='nearest', cmap='coolwarm', vmin=0, vmax=1)
+        ax_att = f.add_subplot(gs[1:-2, 1:-2])
+        cbar_ax = f.add_subplot(gs[1:-2, -1])
+        y_plots_left = [f.add_subplot(gs[i + 1, 0]) for i in range(self.y_dim)]
+        y_plots_right = [f.add_subplot(gs[i + 1, -2]) for i in range(self.y_dim)]
+        x_plots_bottom = [f.add_subplot(gs[-2, 1 + i]) for i in range(self.y_dim)]
+        x_plots_top = [f.add_subplot(gs[0, 1 + i]) for i in range(self.y_dim)]
 
-        # ticks
-        x_tick_idx = [self.context_points * i + i * self.col_divider_width for i in range(num_blocks)]
-        x_tick_labels = [str(i) for i in range(num_blocks)]
-        y_tick_idx = [self.context_points * i + i * self.row_divider_width for i in range(num_blocks)]
-        y_tick_labels = [str(i) for i in range(num_blocks)]
-        plt.xticks(x_tick_idx, x_tick_labels)
-        plt.yticks(y_tick_idx, y_tick_labels)
-        plt.tick_params(top=True, right=True, labeltop=True, labelright=True)
+        ts_plots = y_plots_left + y_plots_right + x_plots_bottom + x_plots_top
+
+        # turn off x and y axis for x_plots and y_plots
+        for i in range(len(ts_plots)):
+            ts_plots[i].set_xticks([])
+            ts_plots[i].set_yticks([])
+        ax_att.set_xticks([])
+        ax_att.set_yticks([])
+
+        # put a text box representing the index in the top left corner of each ts_plot
+        size = 10
+        for i in range(self.y_dim):
+            y_plots_left[i].text(0.02, 0.98, str(i), transform=y_plots_left[i].transAxes, fontsize=size,
+                                 verticalalignment='top')
+            y_plots_right[i].text(0.02, 0.98, str(i), transform=y_plots_right[i].transAxes, fontsize=size,
+                                  verticalalignment='top')
+            x_plots_bottom[i].text(0.02, 0.98, str(i), transform=x_plots_bottom[i].transAxes, fontsize=size,
+                                   verticalalignment='top')
+            x_plots_top[i].text(0.02, 0.98, str(i), transform=x_plots_top[i].transAxes, fontsize=size,
+                                verticalalignment='top')
+
+        time = np.arange(self.context_points)
+        for i in range(self.y_dim):
+            y_plots_left[i].plot(data[:, i], time, marker='o', color='C0',  markersize=1)
+            y_plots_right[i].plot(data[:, i], time, marker='o', color='C0',  markersize=1)
+            x_plots_bottom[i].plot(time, data[:, i], marker='o', color='C0',  markersize=1)
+            x_plots_top[i].plot(time, data[:, i], marker='o', color='C0',  markersize=1)
+
+        att_plot = ax_att.imshow(att_with_dividers, interpolation='none', cmap='nipy_spectral', vmin=0, vmax=1)
+        sums = np.nansum(att_with_dividers, axis=-1)
+        for i, sum_val in enumerate(sums):
+            # Position the text to the right of the last column of ax_att
+            ax_att.text(att_with_dividers.shape[1] - .5, i, f"{sum_val:.1f}", va='center', ha='left', fontsize=3)
+
+        cbar = f.colorbar(att_plot, cax=cbar_ax)
         plt.title(title)
-        plt.colorbar()
-        return fig
-        # buf = io.BytesIO()
-        # fig.savefig(buf, format="png", dpi=300)
-        # buf.seek(0)
-        # img_arr = np.frombuffer(buf.getvalue(), dtype=np.uint8)
-        # buf.close()
-        # plt.close(fig)
-        # img = cv2.imdecode(img_arr, 1)
-        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        # return img
+        return f
 
-    def _make_imgs(self, attns, img_title_prefix):
+    def _make_imgs(self, attns, idxs, img_title_prefix):
         # heads = [i for i in range(attns.shape[0])] + ["avg", "sum"]
-        heads = [i for i in range(attns.shape[0])]
-        imgs = []
-        for head in heads:
-            if head == "avg":
-                a_head = attns.mean(0)
-            elif head == "sum":
-                a_head = attns.sum(0)
-            else:
-                a_head = attns[head]
-            a_head /= torch.max(a_head, dim=-1)[0].unsqueeze(1)
+        batches = attns.shape[0]
+        _, y_c, _, y_t = [i[idxs].cpu().numpy() for i in self.test_data]
 
+        imgs = []
+        for b in range(batches):
+            a = attns[b, 0, ...]
+            a = a.cpu().numpy().squeeze()
+            data = y_c[b, ...]
             imgs.append(
-                self._att_image(a_head.cpu().numpy(), f"{img_title_prefix} Head {str(head)}")
+                self._att_image(a, data, f"{img_title_prefix}|H {0}|i {idxs[b]}|c {self.context_points}")
             )
         return imgs
 
@@ -591,16 +626,20 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
         return scores
 
     def on_validation_end(self, trainer, model):
-        self_attns, cross_attns = self._get_attns(model)
+        self_attns, cross_attns, idxs = self._get_attns(model)
 
         if self_attns is not None:
             self_attn_imgs = self._make_imgs(
-                self_attns, f"Self Attn, Layer {self.layer},"
+                self_attns, idxs, f"Self Attn, Layer {self.layer},"
             )
             # save images to local temporarily
             path = os.path.join(trainer.logger.experiment.dir,
                                 f"self_attn_{trainer.global_step}_layer_{self.layer}.svg")
             self_attn_imgs[0].savefig(path)
+            # save out numpy array of attention matrix
+            path = os.path.join(trainer.logger.experiment.dir,
+                                f"self_attn_{trainer.global_step}_layer_{self.layer}.npy")
+            np.save(path,self_attns.cpu().numpy())
 
             # cv2.imwrite(path, self_attn_imgs[0])
 
