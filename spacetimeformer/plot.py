@@ -296,8 +296,8 @@ class AttentionMatrixCallback(pl.Callback):
             dec_attns = None
         return enc_attns, dec_attns
 
-    def attention_matrix_image(data, title, tick_spacing=None, cmap="Blues"):
-        fig, ax = plt.subplots(figsize=(5, 5))
+    def attention_matrix_image(data, title, tick_spacing=None, cmap="nipy_spectral"):
+        fig, ax = plt.subplots(figsize=(10, 10),dpi=300)
 
         plt.imshow(data, cmap=cmap)
         if tick_spacing:
@@ -306,7 +306,7 @@ class AttentionMatrixCallback(pl.Callback):
 
         plt.title(title)
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=128)
+        fig.savefig(buf, format="png", dpi=300)
         buf.seek(0)
         img_arr = np.frombuffer(buf.getvalue(), dtype=np.uint8)
         buf.close()
@@ -333,7 +333,7 @@ class AttentionMatrixCallback(pl.Callback):
                         a_head.cpu().numpy(),
                         f"{img_title_prefix} Head {str(head)}",
                         tick_spacing=a_head.shape[-2],
-                        cmap="Blues",
+                        cmap="nipy_spectral",
                     )
                 )
             )
