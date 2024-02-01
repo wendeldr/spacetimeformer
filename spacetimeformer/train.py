@@ -6,7 +6,8 @@ import os
 import uuid
 import pandas as pd
 import numpy as np
-
+from scipy.stats import chi2, norm, beta, gamma
+import math
 import pytorch_lightning as pl
 import torch
 
@@ -39,7 +40,9 @@ _DSETS = [
     "eeg",
     "clean_phaseshifted",
     "three_simple_waves",
-    "fast",
+    "contemporaneous_dep_S1",
+    "time_dep_S2",
+    "both_dep_S3",
     "EDF",
 ]
 
@@ -810,60 +813,59 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         INV_SCALER = dset.reverse_scaling
         SCALER = dset.apply_scaling
         NULL_VAL = None
-    elif config.dset == "fast":
+    elif config.dset == "contemporaneous_dep_S1":
         fs = 2048  # Sampling rate (Hz)
-        T = 10  # Length of epochs (s)
-        f = 100  # Frequency of sinusoids (Hz)
-        t = np.arange(0, T, 1 / fs)  # Time array
-        A = 1  # Amplitude
-        sigma = 0.1  # Gaussian noise variance
+        T = 300  # Length of epochs (s)
 
-        # Damping/growth factor
-        k = 10
+        # Set the seed for reproducibility
+        np.random.seed(0)
 
-        # Number of repetitions
-        N = 30  # Replace with desired number of repetitions
+        # Define the number of iterations for the simulation
+        n_iterations = fs * T
 
-        # Initializing the data array
-        data = []
+        # Preallocate the arrays for the x variables
+        x1 = np.zeros(n_iterations)
+        x2 = np.zeros(n_iterations)
+        x3 = np.zeros(n_iterations)
+        x4 = np.zeros(n_iterations)
+        x5 = np.zeros(n_iterations)
 
-        # Phase differences for the sine waves
-        phase_differences = [0, np.pi]
-        names = ['0 (0°)', 'π (180°)']
+        # Define the rate lambda for the exponential distribution
+        lambda_rate = 2
 
-        # Time variable for the repeating dampened wave
-        repeating_t = t % (T / N)
+        # Generate the noise processes e1t, e2t, e3t, e4t, e5t
+        e1 = np.random.exponential(scale=1 / lambda_rate, size=n_iterations)
+        e2 = chi2.rvs(df=1, size=n_iterations)
+        e3 = norm.rvs(scale=1, size=n_iterations)  # Gaussian with mean 0, std 1
+        e4 = norm.rvs(scale=1, size=n_iterations)  # Gaussian with mean 0, std 1
+        e5 = norm.rvs(scale=1, size=n_iterations)  # Gaussian with mean 0, std 1
 
-        # Append dampened sine wave (repeating)
-        dampened_wave = A * np.exp(-k * repeating_t) * np.sin(2 * np.pi * f * repeating_t)
-        data.append(dampened_wave)
+        for t in range(1, n_iterations):
+            # Generate the x variables based on the given equations
+            x1[t] = e1[t]
+            x2[t] = e2[t]
+            x3[t] = 0.8 * x2[t] + e3[t]
+            x4[t] = 0.7 * x1[t] * (math.pow(x1[t], 2) - 1) * np.exp((-math.pow(x1[t], 2)) / 2) + e4[t]
+            x5[t] = 0.3 * x2[t] + 0.05 * math.pow(x2[t], 2) + e5[t]
 
-        # Append standard and phase-shifted sine waves
-        for ps in phase_differences:
-            # Create the sine wave with phase shift
-            sig = np.sin(2 * np.pi * f * t - ps)
-            data.append(sig)
+        # After the loop, x1t, x2t, x3t, x4t, and x5t contain the simulation data.
 
-        data = np.array(data).T
-        # Update names for the new waves
-        names.insert(0, "Dampened")
+        PLOT_VAR_NAMES = np.arange(5) + 1
+        PLOT_VAR_IDXS = np.arange(5)
 
-        PLOT_VAR_NAMES = names
-        PLOT_VAR_IDXS = np.arange(0, len(names))
+        data = np.array([x1, x2, x3, x4, x5]).T
 
         df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
-        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="D")
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="ms")
 
         dset = stf.data.CSVTimeSeries(
             data_path=None,
             raw_df=df,
-            target_cols=PLOT_VAR_NAMES,
-            ignore_cols=[],
-            val_split=0.2,
-            test_split=0.2,
+            val_split=0.1,
+            test_split=0.1,
             normalize=True,
             time_col_name="Datetime",
-            time_features=["day"],
+            time_features=["minute", 'second', 'millisecond'],
         )
         yc_dim = data.shape[1]
         yt_dim = data.shape[1]
@@ -884,16 +886,168 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         INV_SCALER = dset.reverse_scaling
         SCALER = dset.apply_scaling
         NULL_VAL = None
+    elif config.dset == "time_dep_S2":
+        fs = 2048  # Sampling rate (Hz)
+        T = 150  # Length of epochs (s)
 
+        # Set the seed for reproducibility
+        np.random.seed(0)
+
+        # Define the number of iterations for the simulation
+        n_iterations = fs * T
+
+        # Preallocate the arrays for the x variables
+        x1 = np.zeros(n_iterations)
+        x2 = np.zeros(n_iterations)
+        x3 = np.zeros(n_iterations)
+        x4 = np.zeros(n_iterations)
+        x5 = np.zeros(n_iterations)
+
+        # Define the rate lambda for the exponential distribution
+        lambda_rate = 2
+
+        # Generate the noise processes e1t, e2t, e3t, e4t, e5t
+        e1 = norm.rvs(scale=1, size=n_iterations)  # Gaussian with mean 0, std 1
+        e2 = np.random.exponential(scale=1 / lambda_rate, size=n_iterations)
+        e3 = beta.rvs(a=1, b=2, size=n_iterations)
+        e4 = beta.rvs(a=2, b=1, size=n_iterations)
+        e5 = norm.rvs(scale=1, size=n_iterations)  # Gaussian with mean 0, std 1
+
+        for t in range(3, n_iterations):
+            # Generate the x variables based on the given equations
+            x1[t] = 0.7 * x1[t - 1] + e1[t]
+            x2[t] = 0.3 * np.power(x1[t - 2], 2) + e2[t]
+            x3[t] = 0.4 * x1[t-3] - 0.3 * x3[t-2] + e3[t]
+            x4[t] = 0.7 * x4[t-1] - 0.3 * x5[t-1] * np.exp((-math.pow(x5[t-1], 2)) / 2) + e4[t]
+            x5[t] = 0.5 * x4[t-1] + 0.2 * x5[t-2] + e5[t]
+
+        # After the loop, x1t, x2t, x3t, x4t, and x5t contain the simulation data.
+
+        PLOT_VAR_NAMES = np.arange(5) + 1
+        PLOT_VAR_IDXS = np.arange(5)
+
+        data = np.array([x1, x2, x3, x4, x5]).T
+
+        df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="ms")
+
+        dset = stf.data.CSVTimeSeries(
+            data_path=None,
+            raw_df=df,
+            val_split=0.2,
+            test_split=0.2,
+            normalize=True,
+            time_col_name="Datetime",
+            time_features=["minute", 'second', 'millisecond'],
+        )
+        yc_dim = data.shape[1]
+        yt_dim = data.shape[1]
+        x_dim = dset.time_cols.shape[0]
+
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
+    elif config.dset == "both_dep_S3":
+        fs = 2048  # Sampling rate (Hz)
+        T = 150  # Length of epochs (s)
+
+        # Set the seed for reproducibility
+        np.random.seed(0)
+
+        # Define the number of iterations for the simulation
+        n_iterations = fs * T
+
+        # Preallocate the arrays for the x variables
+        x1 = np.zeros(n_iterations)
+        x2 = np.zeros(n_iterations)
+        x3 = np.zeros(n_iterations)
+        x4 = np.zeros(n_iterations)
+        x5 = np.zeros(n_iterations)
+
+        # Define the rate lambda for the exponential distribution
+        lambda_rate = 2
+
+        # Generate the noise processes e1t, e2t, e3t, e4t, e5t
+        e1 = norm.rvs(scale=1, size=n_iterations)  # Gaussian with mean 0, std 1
+        e2 = beta.rvs(a=1, b=2, size=n_iterations)
+        e3 = beta.rvs(a=1, b=2, size=n_iterations)
+        e4 = norm.rvs(scale=1, size=n_iterations)
+        e5 = gamma.rvs(a=16, rate=1/0.25, size=n_iterations)
+
+        for t in range(3, n_iterations):
+            # Generate the x variables based on the given equations
+            x1[t] = 0.6 * x1[t - 2] + e1[t]
+            x2[t] = x1[t] + 0.3 * x2[t-1] + e2[t]
+            x3[t] = 0.3 + x3[t-1] + np.sin(x2[t-1]) + e3[t]
+            x4[t] = 0.4 * x3[t-2] + e4[t]
+            x5[t] = -3.2 * 0.5 * math.pow(x3[t-1], 2) + e5[t]
+
+        # After the loop, x1t, x2t, x3t, x4t, and x5t contain the simulation data.
+        PLOT_VAR_NAMES = np.arange(5) + 1
+        PLOT_VAR_IDXS = np.arange(5)
+
+        data = np.array([x1, x2, x3, x4, x5]).T
+
+        df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="ms")
+
+        dset = stf.data.CSVTimeSeries(
+            data_path=None,
+            raw_df=df,
+            val_split=0.2,
+            test_split=0.2,
+            normalize=True,
+            time_col_name="Datetime",
+            time_features=["minute", 'second', 'millisecond'],
+        )
+        yc_dim = data.shape[1]
+        yt_dim = data.shape[1]
+        x_dim = dset.time_cols.shape[0]
+
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
     elif config.dset == "EDF":
         edf = read_edf(args.data_path, preload=True)
         df = edf.to_data_frame(picks=args.channels, time_format='datetime')
+
+        pd.set_option('display.max_columns', 500)
+        # print data length and NAN count:
+        print(df.describe())
+
+        PLOT_VAR_NAMES = args.channels
+        PLOT_VAR_IDXS = np.arange(len(PLOT_VAR_NAMES))
         dset = stf.data.CSVTimeSeries(
             raw_df=df,
             val_split=0.2,
             test_split=0.2,
             time_col_name="time",
-            time_features=["minute", "second", "microsecond"],
+            normalize=True,
+            time_features=["second", "millisecond", "microsecond"],
         )
         DATA_MODULE = stf.data.DataModule(
             datasetCls=stf.data.CSVTorchDset,
@@ -1047,24 +1201,32 @@ def main(args):
         # check if channels exist. If not use all channels.
         if args.channels is None or args.channels == '':
             args.channels = edf.ch_names
+            potential_list = args.channels
 
-        # check if channels are valid
-        # check if list of channels or single channel provided.
-        # if single channel, convert to list
-        # list will be either python list format or just csv string
-        # strip [,] from string
-        potential_list = args.channels.strip('[]')
-        if ',' in potential_list:
-            potential_list = potential_list.split(',')
         else:
-            potential_list = [potential_list]
+            # strip [,] from string
+            potential_list = args.channels.strip('[]')
 
-        not_overlapping = list(set(potential_list).difference(edf.ch_names))
-        valid_string = ",".join(edf.ch_names)
-        assert len(
-            not_overlapping) == 0, f"Invalid channel name(s) provided.\nValid channels are: {valid_string}\nYou provided these which don't overlap: {not_overlapping}"
-        edf_channels = potential_list
-        args.channels = edf_channels
+            # check if channels are valid
+            # check if list of channels or single channel provided.
+            # if single channel, convert to list
+            # list will be either python list format or just csv string
+            if ',' in potential_list:
+                potential_list = potential_list.split(',')
+            else:
+                potential_list = [potential_list]
+
+            not_overlapping = list(set(potential_list).difference(edf.ch_names))
+            valid_string = ",".join(edf.ch_names)
+
+            assert len(
+                not_overlapping) == 0, f"Invalid channel name(s) provided.\nValid channels are: {valid_string}\nYou provided these which don't overlap: {not_overlapping}"
+            args.channels = potential_list
+        print(f"Processing channels from {args.data_path}")
+        print(f"channels to use: {args.channels}")
+        # check for data shape
+        d = edf.get_data(picks=args.channels)
+        print(d.shape)
 
     log_dir = os.getenv("STF_LOG_DIR")
     if log_dir is None:
@@ -1170,7 +1332,7 @@ def main(args):
             stf.plot.AttentionMatrixCallback(
                 test_samples,
                 layer=0,
-                total_samples=min(16, args.batch_size),
+                total_samples=min(1, args.batch_size),
             )
         )
 
@@ -1198,11 +1360,12 @@ def main(args):
                 stf.plot.AttentionMatrixCallback_SANSWANDB(
                     test_samples,
                     layer=0,
-                    total_samples=min(16, args.batch_size),
+                    total_samples=min(args.plot_samples, args.batch_size),
                     context_points=args.context_points,
                     y_dim=forecaster.d_yc,
                     col_divider_width=1,
                     row_divider_width=1,
+                    random_sample_output=False,
                 )
             )
         if args.plot:
@@ -1215,6 +1378,8 @@ def main(args):
                     total_samples=min(args.plot_samples, args.batch_size),
                     log_to_wandb=False,
                     log_to_file=True,
+                    start_idx=data_module.dataset_kwargs['csv_time_series'].test_idx_start,
+                    random_sample_output=False,
                 )
             )
 

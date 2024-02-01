@@ -328,7 +328,7 @@ class Spacetimeformer_Forecaster(stf.Forecaster):
         )
         scheduler = {
                 'scheduler': self.scheduler,
-                'monitor': 'val/mape',  #Available metrics are: ['train/mape', 'train/mae', 'train/mse', 'train/smape', 'train/norm_mae', 'train/norm_mse', 'train/forecast_loss', 'train/class_loss', 'train/recon_loss', 'train/loss', 'train/acc', 'val/mape', 'val/mae', 'val/mse', 'val/smape', 'val/norm_mae', 'val/norm_mse', 'val/forecast_loss', 'val/class_loss', 'val/recon_loss', 'val/loss', 'val/acc'
+                'monitor': 'val/forecast_loss',  #Available metrics are: ['train/mape', 'train/mae', 'train/mse', 'train/smape', 'train/norm_mae', 'train/norm_mse', 'train/forecast_loss', 'train/class_loss', 'train/recon_loss', 'train/loss', 'train/acc', 'val/mape', 'val/mae', 'val/mse', 'val/smape', 'val/norm_mae', 'val/norm_mse', 'val/forecast_loss', 'val/class_loss', 'val/recon_loss', 'val/loss', 'val/acc'
             }
         return {'optimizer': self.optimizer, 'lr_scheduler': scheduler}
 

@@ -50,8 +50,8 @@ def plot(x_c, y_c, x_t, y_t, idx, title, preds, pad_val=None, conf=None):
             xaxis_t, (preds - conf), (preds + conf), color="orange", alpha=0.1
         )
 
-    ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.3), shadow=False, ncol=4, prop={"size": 12})
-    # ax.legend(loc="upper left", prop={"size": 12})
+    # ax.legend(loc='lower center', bbox_to_anchor=(0.5, -0.3), shadow=False, ncol=4, prop={"size": 12})
+    ax.legend(loc="upper left", prop={"size": 10})
     # ax.set_facecolor("#f0f0f0")
     # ax.set_xticks([])
     # ax.set_xlabel("")
@@ -80,12 +80,16 @@ class PredictionPlotterCallback(pl.Callback):
             total_samples=4,
             log_to_wandb=True,
             log_to_file=False,
+            start_idx=0,
+            random_sample_output=True,
     ):
         self.test_data = test_batch
         self.total_samples = total_samples
         self.pad_val = pad_val
         self.log_to_wandb = log_to_wandb
         self.log_to_file = log_to_file
+        self.start_idx = start_idx
+        self.random_sample_output = random_sample_output
 
         if var_idxs is None and var_names is None:
             d_yt = self.test_data[-1].shape[-1]
@@ -94,18 +98,18 @@ class PredictionPlotterCallback(pl.Callback):
 
         self.var_idxs = var_idxs
         self.var_names = var_names
-        self.imgs = None
 
     def on_validation_end(self, trainer, model):
-
-        if self.test_data[0].shape[0] < self.total_samples:
-            # sample a 1/4 of the data to reduce time
-            one_fourth = self.test_data[0].shape[0] // 4
-            if one_fourth <= 0:
-                one_fourth = 1
-            self.total_samples = one_fourth
-
-        idxs = [random.sample(range(self.test_data[0].shape[0]), k=self.total_samples)]
+        # if self.test_data[0].shape[0] < self.total_samples:
+        #     # sample a 1/4 of the data to reduce time
+        #     one_fourth = self.test_data[0].shape[0] // 4
+        #     if one_fourth <= 0:
+        #         one_fourth = 1
+        #     self.total_samples = one_fourth
+        if self.random_sample_output:
+            idxs = [random.sample(range(self.test_data[0].shape[0]), k=self.total_samples)]
+        else:
+            idxs = [np.arange(self.total_samples)]
         x_c, y_c, x_t, y_t = [i[idxs].detach().to(model.device) for i in self.test_data]
         with torch.no_grad():
             preds, *_ = model(x_c, y_c, x_t, y_t, **model.eval_step_forward_kwargs)
@@ -113,8 +117,8 @@ class PredictionPlotterCallback(pl.Callback):
 
         imgs = []
         for i in range(preds.shape[0]):
-
             for var_idx, var_name in zip(self.var_idxs, self.var_names):
+                var_name = f"{var_name} @ start {self.start_idx}+{idxs[i]}"
                 img = plot(
                     x_c[i].cpu().numpy(),
                     y_c[i].cpu().numpy(),
@@ -138,11 +142,9 @@ class PredictionPlotterCallback(pl.Callback):
                     "global_step": trainer.global_step,
                 }
             )
-        else:
-            self.imgs = imgs
 
-        if len(self.imgs) > 0 and self.log_to_file:
-            for i, img in enumerate(self.imgs):
+        if len(imgs) > 0 and self.log_to_file:
+            for i, img in enumerate(imgs):
                 cv2.imwrite(os.path.join(trainer.logger.experiment.dir, f"prediction_{trainer.global_step}_{i}.png"),
                             img)
 
@@ -248,20 +250,21 @@ def show_image(data, title, tick_spacing=None, cmap="Blues"):
 
 
 class AttentionMatrixCallback(pl.Callback):
-    def __init__(self, test_batches, layer=0, total_samples=32):
+    def __init__(self, test_batches, layer=0, total_samples=32, log_to_file=False):
         self.test_data = test_batches
         self.total_samples = total_samples
         self.layer = layer
 
     def _get_attns(self, model):
-        if self.test_data[0].shape[0] < self.total_samples:
-            # sample a 1/4 of the data to reduce time
-            one_fourth = self.test_data[0].shape[0] // 4
-            if one_fourth <= 0:
-                one_fourth = 1
-            self.total_samples = one_fourth
+        # if self.test_data[0].shape[0] < self.total_samples:
+        #     # sample a 1/4 of the data to reduce time
+        #     one_fourth = self.test_data[0].shape[0] // 4
+        #     if one_fourth <= 0:
+        #         one_fourth = 1
+        #     self.total_samples = one_fourth
 
-        idxs = [random.sample(range(self.test_data[0].shape[0]), k=self.total_samples)]
+        # idxs = [random.sample(range(self.test_data[0].shape[0]), k=self.total_samples)]
+        idxs = [np.arange(self.total_samples)]
         x_c, y_c, x_t, y_t = [i[idxs].detach().to(model.device) for i in self.test_data]
         enc_attns, dec_attns = None, None
         # save memory by doing inference 1 example at a time
@@ -438,7 +441,7 @@ class AttentionMatrixCallback(pl.Callback):
 
 class AttentionMatrixCallback_SANSWANDB(pl.Callback):
     def __init__(self, test_batches, layer=0, total_samples=32, context_points=8, row_divider_width=1,
-                 col_divider_width=1, y_dim=1):
+                 col_divider_width=1, y_dim=1, start_idx=0, random_sample_output=True):
         self.test_data = test_batches
         self.total_samples = total_samples
         self.layer = layer
@@ -446,11 +449,14 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
         self.row_divider_width = row_divider_width
         self.col_divider_width = col_divider_width
         self.y_dim = y_dim
+        self.start_idx = start_idx
+        self.random_sample_output = random_sample_output
 
     def _get_attns(self, model):
-
-        self.total_samples = 2
-        idxs = [0] + random.sample(range(self.test_data[0].shape[0]),1)
+        if self.random_sample_output:
+            idxs = [random.sample(range(self.test_data[0].shape[0]), k=self.total_samples)]
+        else:
+            idxs = [np.arange(self.total_samples)]
         x_c, y_c, x_t, y_t = [i[idxs].detach().to(model.device) for i in self.test_data]
         enc_attns, dec_attns = None, None
         # save memory by doing inference 1 example at a time
@@ -564,10 +570,10 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
 
         time = np.arange(self.context_points)
         for i in range(self.y_dim):
-            y_plots_left[i].plot(data[:, i], time, marker='o', color='C0',  markersize=1)
-            y_plots_right[i].plot(data[:, i], time, marker='o', color='C0',  markersize=1)
-            x_plots_bottom[i].plot(time, data[:, i], marker='o', color='C0',  markersize=1)
-            x_plots_top[i].plot(time, data[:, i], marker='o', color='C0',  markersize=1)
+            y_plots_left[i].plot(data[:, i], time, marker='o', color='C0', markersize=1)
+            y_plots_right[i].plot(data[:, i], time, marker='o', color='C0', markersize=1)
+            x_plots_bottom[i].plot(time, data[:, i], marker='o', color='C0', markersize=1)
+            x_plots_top[i].plot(time, data[:, i], marker='o', color='C0', markersize=1)
 
         att_plot = ax_att.imshow(att_with_dividers, interpolation='none', cmap='nipy_spectral', vmin=0, vmax=1)
         sums = np.nansum(att_with_dividers, axis=-1)
@@ -581,16 +587,16 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
 
     def _make_imgs(self, attns, idxs, img_title_prefix):
         # heads = [i for i in range(attns.shape[0])] + ["avg", "sum"]
-        batches = attns.shape[0]
+        heads = attns.shape[0]
         _, y_c, _, y_t = [i[idxs].cpu().numpy() for i in self.test_data]
 
         imgs = []
-        for b in range(batches):
-            a = attns[b, 0, ...]
+        for h in range(heads):
+            a = attns[h, 0, ...]
             a = a.cpu().numpy().squeeze()
-            data = y_c[b, ...]
+            data = y_c[h, ...]
             imgs.append(
-                self._att_image(a, data, f"{img_title_prefix}|H {0}|i {idxs[b]}|c {self.context_points}")
+                self._att_image(a, data, f"{img_title_prefix}|H {h}|idx {self.start_idx}+{idxs[h]}|c {self.context_points}")
             )
         return imgs
 
@@ -639,7 +645,7 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
             # save out numpy array of attention matrix
             path = os.path.join(trainer.logger.experiment.dir,
                                 f"self_attn_{trainer.global_step}_layer_{self.layer}.npy")
-            np.save(path,self_attns.cpu().numpy())
+            np.save(path, self_attns.cpu().numpy())
 
             # cv2.imwrite(path, self_attn_imgs[0])
 

@@ -71,6 +71,9 @@ class CSVTimeSeries:
             time_df = pd.to_datetime(raw_df[self.time_col_name], format="%Y-%m-%d %H:%M")
         except ValueError:
             time_df = pd.to_datetime(raw_df[self.time_col_name], format='ISO8601')
+
+        if time_df.dt.tz is not None:
+            # Convert timezone to None (i.e., make timezone-naive)
             time_df = time_df.dt.tz_convert(None)
 
         df = stf.data.timefeatures.time_features(
@@ -97,6 +100,10 @@ class CSVTimeSeries:
 
         test_cutoff = len(time_df) - max(round(test_split * len(time_df)), 1)
         val_cutoff = test_cutoff - round(val_split * len(time_df))
+
+        self.val_idx_start = val_cutoff,
+        self.test_idx_start = test_cutoff,
+        self.data_len = len(time_df),
 
         val_interval_low = time_df.iloc[val_cutoff]
         val_interval_high = time_df.iloc[test_cutoff - 1]
