@@ -12,7 +12,7 @@ from sklearn.preprocessing import StandardScaler
 
 import spacetimeformer as stf
 
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 
 class CSVTimeSeries:
@@ -155,18 +155,18 @@ class CSVTimeSeries:
         self._val_data = self.apply_scaling_df(self._val_data)
         self._test_data = self.apply_scaling_df(self._test_data)
 
-    def make_hists(self):
-        for col in self.target_cols + self.exo_cols:
-            train = self._train_data[col]
-            test = self._test_data[col]
-            bins = np.linspace(-5, 5, 80)  # warning: edit bucket limits
-            plt.hist(train, bins, alpha=0.5, label="Train", density=True)
-            plt.hist(test, bins, alpha=0.5, label="Test", density=True)
-            plt.legend(loc="upper right")
-            plt.title(col)
-            plt.tight_layout()
-            plt.savefig(f"{col}-hist.png")
-            plt.clf()
+    # def make_hists(self):
+    #     for col in self.target_cols + self.exo_cols:
+    #         train = self._train_data[col]
+    #         test = self._test_data[col]
+    #         bins = np.linspace(-5, 5, 80)  # warning: edit bucket limits
+    #         plt.hist(train, bins, alpha=0.5, label="Train", density=True)
+    #         plt.hist(test, bins, alpha=0.5, label="Test", density=True)
+    #         plt.legend(loc="upper right")
+    #         plt.title(col)
+    #         plt.tight_layout()
+    #         plt.savefig(f"{col}-hist.png")
+    #         plt.clf()
 
     def get_slice(self, split, start, stop, skip):
         assert split in ["train", "val", "test"]

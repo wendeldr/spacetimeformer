@@ -144,13 +144,20 @@ class Forecaster(pl.LightningModule, ABC):
         y_c: torch.Tensor,
         x_t: torch.Tensor,
         sample_preds: bool = False,
+        scale_input: bool = True,
+        scale_output: bool = True,
     ) -> torch.Tensor:
+        self.eval()
         og_device = y_c.device
         # move to model device
         x_c = x_c.to(self.device).float()
         x_t = x_t.to(self.device).float()
         # move y_c to cpu if it isn't already there, scale, and then move back to the model device
-        y_c = torch.from_numpy(self._scaler(y_c.cpu().numpy())).to(self.device).float()
+        if scale_input:
+            y_c = torch.from_numpy(self._scaler(y_c.cpu().numpy())).to(self.device).float()
+        else:
+            y_c = y_c.to(self.device).float()
+
         # create dummy y_t of zeros
         y_t = (
             torch.zeros((x_t.shape[0], x_t.shape[1], self.d_yt)).to(self.device).float()
@@ -163,11 +170,15 @@ class Forecaster(pl.LightningModule, ABC):
             )
 
         # preds --> cpu --> inverse scale to original units --> original device of y_c
-        preds = (
-            torch.from_numpy(self._inv_scaler(normalized_preds.cpu().numpy()))
-            .to(og_device)
-            .float()
-        )
+        if scale_output:
+            preds = (
+                torch.from_numpy(self._inv_scaler(normalized_preds.cpu().numpy()))
+                .to(og_device)
+                .float()
+            )
+        else:
+            preds = normalized_preds.to(og_device).float()
+        self.train()
         return preds
 
     @abstractmethod

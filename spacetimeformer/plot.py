@@ -1,3 +1,6 @@
+
+import matplotlib
+matplotlib.use('Agg')
 import io
 import math
 import os
@@ -100,6 +103,7 @@ class PredictionPlotterCallback(pl.Callback):
         self.var_names = var_names
 
     def on_validation_end(self, trainer, model):
+        model.eval()
         # if self.test_data[0].shape[0] < self.total_samples:
         #     # sample a 1/4 of the data to reduce time
         #     one_fourth = self.test_data[0].shape[0] // 4
@@ -147,7 +151,7 @@ class PredictionPlotterCallback(pl.Callback):
             for i, img in enumerate(imgs):
                 cv2.imwrite(os.path.join(trainer.logger.experiment.dir, f"prediction_{trainer.global_step}_{i}.png"),
                             img)
-
+        model.train()
 
 class ImageCompletionCallback(pl.Callback):
     def __init__(self, test_batches, total_samples=12, mode="flat"):
@@ -180,7 +184,7 @@ class ImageCompletionCallback(pl.Callback):
         return completed_imgs
 
     def on_validation_end(self, trainer, model):
-
+        model.eval()
         if self.mode == "flat":
             completed_imgs = self.complete_flat_img(trainer, model)
         elif self.mode == "left-right":
@@ -197,6 +201,7 @@ class ImageCompletionCallback(pl.Callback):
                 "global_step": trainer.global_step,
             }
         )
+        model.train()
 
 
 class CopyTaskCallback(pl.Callback):
@@ -205,6 +210,7 @@ class CopyTaskCallback(pl.Callback):
         self.total_samples = total_samples
 
     def on_validation_end(self, trainer, model):
+        model.eval()
         with torch.no_grad():
             idxs = [
                 random.sample(range(self.test_data[0].shape[0]), k=self.total_samples)
@@ -227,6 +233,7 @@ class CopyTaskCallback(pl.Callback):
                 "global_step": trainer.global_step,
             }
         )
+        model.train()
 
 
 def show_image(data, title, tick_spacing=None, cmap="Blues"):
@@ -374,6 +381,7 @@ class AttentionMatrixCallback(pl.Callback):
         return scores
 
     def on_validation_end(self, trainer, model):
+        model.eval()
         self_attns, cross_attns = self._get_attns(model)
 
         if self_attns is not None:
@@ -437,6 +445,7 @@ class AttentionMatrixCallback(pl.Callback):
         trainer.logger.experiment.log(
             {"test/pos_embs": emb_sim_imgs, "global_step": trainer.global_step}
         )
+        model.train()
 
 
 class AttentionMatrixCallback_SANSWANDB(pl.Callback):
@@ -632,6 +641,7 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
         return scores
 
     def on_validation_end(self, trainer, model):
+        model.eval()
         self_attns, cross_attns, idxs = self._get_attns(model)
 
         if self_attns is not None:
@@ -679,3 +689,4 @@ class AttentionMatrixCallback_SANSWANDB(pl.Callback):
         #         cmap="Greens",
         #     ),
         # ]
+        model.train()
