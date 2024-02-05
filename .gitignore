@@ -48,4 +48,10 @@ checkpoints/
 
 .vscode
 *.csv
-/spacetimeformer/data/STF_LOG_DIR/highlr_001_da8dce5e/highlr_001epoch=44.ckpt
+*.ckpt
+
+lightning_logs/*
+
+*.png
+*.pkl
+*.npy
