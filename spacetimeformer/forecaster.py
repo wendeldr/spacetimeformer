@@ -7,6 +7,7 @@ import pytorch_lightning as pl
 import numpy as np
 
 import spacetimeformer as stf
+import numpy as np
 
 
 class Forecaster(pl.LightningModule, ABC):
@@ -143,9 +144,11 @@ class Forecaster(pl.LightningModule, ABC):
         x_c: torch.Tensor,
         y_c: torch.Tensor,
         x_t: torch.Tensor,
-        sample_preds: bool = False,
+        output_pred_image: bool = False,
+        output_attention_mat: bool = False,
         scale_input: bool = True,
         scale_output: bool = True,
+            name = "",
     ) -> torch.Tensor:
         self.eval()
         og_device = y_c.device
@@ -163,11 +166,27 @@ class Forecaster(pl.LightningModule, ABC):
             torch.zeros((x_t.shape[0], x_t.shape[1], self.d_yt)).to(self.device).float()
         )
 
+        if output_attention_mat:
+            params = {"output_attn": True}
+        else:
+            params = self.eval_step_forward_kwargs
+
         with torch.no_grad():
             # gradient-free prediction
-            normalized_preds, *_ = self.forward(
-                x_c, y_c, x_t, y_t, **self.eval_step_forward_kwargs
+            normalized_preds, recon_output, (logits, labels), (self_attn, cross_attn) = self.forward(
+                x_c, y_c, x_t, y_t, **params
             )
+
+        if output_attention_mat:
+            for l in range(len(self_attn)):
+                # check if this is a multihead attention layer
+                if isinstance(self_attn[l], list):
+                    for h in range(len(self_attn[l])):
+                        np.save(f"{name}~self_attn_{l}_{h}.npy", self_attn[l][h].detach().cpu().numpy())
+                        np.save(f"{name}~cross_attn_{l}_{h}.npy", cross_attn[l][h].detach().cpu().numpy())
+                else:
+                    np.save(f"{name}~self_attn_{l}_0.npy", self_attn[l].detach().cpu().numpy())
+                    np.save(f"{name}~cross_attn_{l}_0.npy", cross_attn[l].detach().cpu().numpy())
 
         # preds --> cpu --> inverse scale to original units --> original device of y_c
         if scale_output:
