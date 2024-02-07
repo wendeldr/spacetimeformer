@@ -82,6 +82,7 @@ class Spacetimeformer_Forecaster(stf.Forecaster):
             use_revin=use_revin,
             use_seasonal_decomp=use_seasonal_decomp,
             linear_shared_weights=linear_shared_weights,
+            verbose=verbose,
         )
         self.spacetimeformer = stf.spacetimeformer_model.nn.Spacetimeformer(
             d_yc=d_yc,
@@ -118,7 +119,7 @@ class Spacetimeformer_Forecaster(stf.Forecaster):
             attn_time_windows=attn_time_windows,
             use_shifted_time_windows=use_shifted_time_windows,
             time_emb_dim=time_emb_dim,
-            verbose=True,
+            verbose=verbose,
             null_value=null_value,
             pad_value=pad_value,
             max_seq_len=max_seq_len,
@@ -323,7 +324,7 @@ class Spacetimeformer_Forecaster(stf.Forecaster):
             init_lr=self.init_lr,
             peak_lr=self.base_lr,
             warmup_steps=self.warmup_steps,
-            patience=10,
+            patience=2,
             factor=self.decay_factor,
         )
         scheduler = {

@@ -105,7 +105,7 @@ class Embedding(nn.Module):
         # `spatio_temporal_embed`'s multivariate "Given"
         # concept there isn't much else we can do here.
         # NaNs should probably be set to a magic number value
-        # in the dataset and passed to the null_value arg.
+        # in the s1 and passed to the null_value arg.
         y = torch.nan_to_num(y)
         x = torch.nan_to_num(x)
 
@@ -214,7 +214,7 @@ class Embedding(nn.Module):
             given *= (y == y_original).squeeze(-1)
 
             if self.null_value is not None:
-                # mask null values that were set to a magic number in the dataset itself
+                # mask null values that were set to a magic number in the s1 itself
                 null_mask = (y != self.null_value).squeeze(-1)
                 given *= null_mask
 

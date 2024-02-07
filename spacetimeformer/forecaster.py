@@ -173,20 +173,26 @@ class Forecaster(pl.LightningModule, ABC):
 
         with torch.no_grad():
             # gradient-free prediction
-            normalized_preds, recon_output, (logits, labels), (self_attn, cross_attn) = self.forward(
-                x_c, y_c, x_t, y_t, **params
-            )
 
-        if output_attention_mat:
-            for l in range(len(self_attn)):
-                # check if this is a multihead attention layer
-                if isinstance(self_attn[l], list):
-                    for h in range(len(self_attn[l])):
-                        np.save(f"{name}~self_attn_{l}_{h}.npy", self_attn[l][h].detach().cpu().numpy())
-                        np.save(f"{name}~cross_attn_{l}_{h}.npy", cross_attn[l][h].detach().cpu().numpy())
-                else:
-                    np.save(f"{name}~self_attn_{l}_0.npy", self_attn[l].detach().cpu().numpy())
-                    np.save(f"{name}~cross_attn_{l}_0.npy", cross_attn[l].detach().cpu().numpy())
+            if output_attention_mat:
+                normalized_preds, recon_output, (logits, labels), (self_attn, cross_attn) = self.forward(
+                    x_c, y_c, x_t, y_t, **params
+                )
+            else:
+                normalized_preds, *_ = self.forward(
+                    x_c, y_c, x_t, y_t, **params
+                )
+
+        # if output_attention_mat:
+        #     for l in range(len(self_attn)):
+        #         # check if this is a multihead attention layer
+        #         if isinstance(self_attn[l], list):
+        #             for h in range(len(self_attn[l])):
+        #                 np.save(f"{name}~self_attn_{l}_{h}.npy", self_attn[l][h].detach().cpu().numpy())
+        #                 np.save(f"{name}~cross_attn_{l}_{h}.npy", cross_attn[l][h].detach().cpu().numpy())
+        #         else:
+        #             np.save(f"{name}~self_attn_{l}_0.npy", self_attn[l].detach().cpu().numpy())
+        #             np.save(f"{name}~cross_attn_{l}_0.npy", cross_attn[l].detach().cpu().numpy())
 
         # preds --> cpu --> inverse scale to original units --> original device of y_c
         if scale_output:
@@ -198,7 +204,10 @@ class Forecaster(pl.LightningModule, ABC):
         else:
             preds = normalized_preds.to(og_device).float()
         self.train()
-        return preds
+        if output_attention_mat:
+            return preds, self_attn
+        else:
+            return preds
 
     @abstractmethod
     def forward_model_pass(
@@ -318,7 +327,7 @@ class Forecaster(pl.LightningModule, ABC):
         )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            patience=3,
+            patience=2,
             factor=0.2,
         )
         return {
