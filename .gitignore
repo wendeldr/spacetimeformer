@@ -55,3 +55,6 @@ lightning_logs/*
 *.png
 *.pkl
 *.npy
+.eggs/*
+*.log
+*.EDF
