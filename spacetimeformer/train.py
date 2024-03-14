@@ -1,4 +1,5 @@
 from argparse import ArgumentParser
+from contextlib import contextmanager
 import random
 import sys
 import warnings
@@ -6,12 +7,30 @@ import os
 import uuid
 import pandas as pd
 import numpy as np
+import mne
+
 from scipy.stats import chi2, norm, beta, gamma
 import math
 import pytorch_lightning as pl
 import torch
 
 import spacetimeformer as stf
+
+
+@contextmanager
+def suppress_stdout():
+    original_stdout = sys.stdout  # Save the original stdout
+    try:
+        sys.stdout = SuppressOutput()  # Suppress printing
+        yield
+    finally:
+        sys.stdout = original_stdout  # Restore the original stdout
+
+class SuppressOutput:
+    def write(self, _):
+        pass
+    def flush(self):
+        pass 
 
 from connection_complexity.data.raw_data.EDF.edf_helpers import read_edf
 
@@ -47,7 +66,10 @@ _DSETS = [
     "time_dep_S2",
     "both_dep_S3",
     "EDF",
-    "temp"
+    "q_s1",
+    "q_s1ar",
+    "eeg_with_s1",
+    "eeg_with_s2"
 ]
 
 
@@ -896,8 +918,8 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         # NULL_VAL = None
 
         m=0
-        fs = 2048  # Sampling rate (Hz)
-        T = 150  # Length of epochs (s)
+        fs = 256  # Sampling rate (Hz)
+        T = 30  # Length of epochs (s)
 
         # Set the seed for reproducibility
         np.random.seed(42)
@@ -974,9 +996,224 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         INV_SCALER = dset.reverse_scaling
         SCALER = dset.apply_scaling
         NULL_VAL = None
+    elif config.dset == "eeg_with_s2":
+        # generate N scalar values 
+        def generate_scalars(x=20):
+            # Generate x-1 random numbers, values between -1 and 1
+            values = np.random.uniform(-1, 1, x - 1)
+            sum_values = np.sum(values)
+            # Subtract this sum from 1 to get the x+1 value
+            last_value = 1 - sum_values
+            # Append the last value to the list
+            values = np.append(values, last_value)
+            # Shuffle the array to not have the balancing value at the end
+            np.random.shuffle(values)
+            return values
 
-    elif config.dset == "temp":
-        m=.5
+
+        m  = 3
+        fs = 512  # Sampling rate (Hz)
+        T  = 150  # Length of epochs (s)
+
+        # Set the seed for reproducibility
+        np.random.seed(42)
+
+        with suppress_stdout():
+            eeg1 = mne.io.read_raw_edf("/home/wendeldr/git/spacetimeformer/spacetimeformer/data/edf/FC_OvertNaming.EDF", preload=True)
+            eeg2 = mne.io.read_raw_edf("/home/wendeldr/git/spacetimeformer/spacetimeformer/data/edf/PC_OvertNaming.EDF", preload=True)
+
+            sf1 = eeg1.info['sfreq']
+            sf2 = eeg2.info['sfreq']
+
+            # resample to 512 Hz
+            eeg1 = eeg1.resample(fs)
+            eeg2 = eeg2.resample(fs)
+
+
+            # filter 60 Hz noise and harmonics with zerophase notch filter
+            eeg1 = eeg1.notch_filter(np.arange(60, fs//2, 60), fir_design='firwin',verbose=False).get_data(picks=eeg1.info['ch_names'][0]).squeeze()
+            eeg2 = eeg2.notch_filter(np.arange(60, fs//2, 60), fir_design='firwin',verbose=False).get_data(picks=eeg2.info['ch_names'][1]).squeeze()
+
+            # # z normalize data
+            eeg1 = (eeg1 - np.mean(eeg1)) / np.std(eeg1)
+            eeg2 = (eeg2 - np.mean(eeg2)) / np.std(eeg2)
+
+            # quantize data
+            eeg1 = np.round(eeg1, m)
+            eeg2 = np.round(eeg2, m)
+
+        # Define the number of iterations for the simulation
+        n_iterations = fs * T
+        # Preallocate the arrays for the x variables
+        x1 = eeg1[:n_iterations]
+        x2 = eeg2[:n_iterations]
+        # print(x1.shape)
+        x3 = np.zeros(n_iterations)
+        x4 = np.zeros(n_iterations)
+        x5 = np.zeros(n_iterations)
+
+        # Define the rate lambda for the exponential distribution
+        lambda_rate = 2
+
+        # Generate the noise processes e1t, e2t, e3t, e4t, e5t
+        # e1 = norm.rvs(scale=1, size=n_iterations)
+        # e2 = norm.rvs(scale=1, size=n_iterations)
+        e3 = norm.rvs(scale=1, size=n_iterations) * 0.01 
+        e3 = np.round(e3, m)
+        e4 = norm.rvs(scale=1, size=n_iterations) * 0 # Gaussian with mean 0, std 1
+        e5 = norm.rvs(scale=1, size=n_iterations) * 0# Gaussian with mean 0, std 1
+
+        poly = generate_scalars(15)
+        start = 21
+        for i, t in enumerate(range(start, n_iterations)):
+            # Generate the x variables based on the given equations
+            x4[t] = 0.7 * np.sin(x1[t-20]) * (math.pow(x1[t-2], 2) - 1) + e4[t]
+
+            for q, p in enumerate(poly):
+                x3[t] += p * x1[t-(q+1)]
+            x5[t] = 0.3 * x2[t-7] + 0.5 * math.pow(x2[t-1], 2) + 0.05* np.tan(x2[t-20]) + e5[t]
+
+        x3 = np.round(x3, m)
+        x4 = np.round(x4, m)
+        x5 = np.round(x5, m)
+
+        PLOT_VAR_NAMES = np.arange(5) + 1
+        PLOT_VAR_IDXS = np.arange(5)
+
+        data = np.array([x1, x2, x3, x4, x5]).T
+        data = data[start:,:]
+
+        df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="us")
+
+        dset = stf.data.CSVTimeSeries(
+            data_path=None,
+            raw_df=df,
+            val_split=0.1,
+            test_split=0.1,
+            normalize=True,
+            time_col_name="Datetime",
+            time_features=["minute", 'second', 'microsecond'],
+        )
+        yc_dim = data.shape[1]
+        yt_dim = data.shape[1]
+        x_dim = dset.time_cols.shape[0]
+
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
+
+    elif config.dset == "eeg_with_s1":
+        m  = 3
+        fs = 2048  # Sampling rate (Hz)
+        T  = 150  # Length of epochs (s)
+
+        # Set the seed for reproducibility
+        np.random.seed(42)
+
+        with suppress_stdout():
+            eeg1 = mne.io.read_raw_edf("/home/wendeldr/git/spacetimeformer/spacetimeformer/data/edf/FC_OvertNaming.EDF", preload=True)
+            eeg2 = mne.io.read_raw_edf("/home/wendeldr/git/spacetimeformer/spacetimeformer/data/edf/PC_OvertNaming.EDF", preload=True)
+
+            sf1 = eeg1.info['sfreq']
+            sf2 = eeg2.info['sfreq']
+
+            # filter 60 Hz noise and harmonics with zerophase notch filter
+            eeg1 = eeg1.notch_filter(np.arange(60, sf1//2, 60), fir_design='firwin',verbose=False).get_data(picks=eeg1.info['ch_names'][0]).squeeze()
+            eeg2 = eeg2.notch_filter(np.arange(60, sf2//2, 60), fir_design='firwin',verbose=False).get_data(picks=eeg2.info['ch_names'][1]).squeeze()
+
+            # # z normalize data
+            eeg1 = (eeg1 - np.mean(eeg1)) / np.std(eeg1)
+            eeg2 = (eeg2 - np.mean(eeg2)) / np.std(eeg2)
+
+            # quantize data
+            eeg1 = np.round(eeg1, m)
+            eeg2 = np.round(eeg2, m)
+
+        # Define the number of iterations for the simulation
+        n_iterations = fs * T
+        # Preallocate the arrays for the x variables
+        x1 = eeg1[:n_iterations]
+        x2 = eeg2[:n_iterations]
+        # print(x1.shape)
+        x3 = np.zeros(n_iterations)
+        x4 = np.zeros(n_iterations)
+        x5 = np.zeros(n_iterations)
+
+        # Define the rate lambda for the exponential distribution
+        lambda_rate = 2
+
+        # Generate the noise processes e1t, e2t, e3t, e4t, e5t
+        # e1 = norm.rvs(scale=1, size=n_iterations)
+        # e2 = norm.rvs(scale=1, size=n_iterations)
+        e3 = norm.rvs(scale=1, size=n_iterations) * 0.01 
+        e3 = np.round(e3, m)
+        e4 = norm.rvs(scale=1, size=n_iterations) * 0 # Gaussian with mean 0, std 1
+        e5 = norm.rvs(scale=1, size=n_iterations) * 0# Gaussian with mean 0, std 1
+
+        for t in range(6, n_iterations):
+            # Generate the x variables based on the given equations
+            x4[t] = 0.7 * x1[t] * (math.pow(x1[t], 2) - 1) * np.exp((-math.pow(x1[t], 2)) / 2) + e4[t]
+
+            x3[t] = 0.8 * x2[t] + e3[t]
+            x5[t] = 0.3 * x2[t] + 0.05 * math.pow(x2[t], 2) + e5[t]
+
+        x3 = np.round(x3, m)
+        x4 = np.round(x4, m)
+        x5 = np.round(x5, m)
+
+        PLOT_VAR_NAMES = np.arange(5) + 1
+        PLOT_VAR_IDXS = np.arange(5)
+
+        data = np.array([x1, x2, x3, x4, x5]).T
+
+        df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="us")
+
+        dset = stf.data.CSVTimeSeries(
+            data_path=None,
+            raw_df=df,
+            val_split=0.1,
+            test_split=0.1,
+            normalize=True,
+            time_col_name="Datetime",
+            time_features=["minute", 'second', 'microsecond'],
+        )
+        yc_dim = data.shape[1]
+        yt_dim = data.shape[1]
+        x_dim = dset.time_cols.shape[0]
+
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
+
+    elif config.dset == "q_s1":
+        m=0
+        sigfig = 2
         fs = 2048  # Sampling rate (Hz)
         T = 150  # Length of epochs (s)
 
@@ -1004,15 +1241,22 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         e4 = norm.rvs(scale=1, size=n_iterations) *m # Gaussian with mean 0, std 1
         e5 = norm.rvs(scale=1, size=n_iterations) *m# Gaussian with mean 0, std 1
 
+        e1 = np.round(e1, sigfig)
+        e2 = np.round(e2, sigfig)
+        e3 = np.round(e3, sigfig)
+        e4 = np.round(e4, sigfig)
+        e5 = np.round(e5, sigfig)
+
         for t in range(6, n_iterations):
-            # Generate the x variables based on the given equations
-            x1[t] = 0.05 * x1[t-5] - 0.15 * x1[t-4] + 0.25 * x1[t-3] - 0.35 * x1[t-2] + 0.45 * x1[t-1] + e1[t]
-            x2[t] = - 0.01 * x2[t-6] + .09 * x2[t-5] - 0.2 * x2[t-4] + .27 * x2[t-3] - 0.35 * x2[t-2] + .4 * x2[t-1] + e2[t]
+            x1[t] = e1[t]
+            x2[t] = e2[t]
             x3[t] = 0.8 * x2[t] + e3[t]
             x4[t] = 0.7 * x1[t] * (math.pow(x1[t], 2) - 1) * np.exp((-math.pow(x1[t], 2)) / 2) + e4[t]
             x5[t] = 0.3 * x2[t] + 0.05 * math.pow(x2[t], 2) + e5[t]
 
-        # After the loop, x1t, x2t, x3t, x4t, and x5t contain the simulation data.
+        x3 = np.round(x3, sigfig)
+        x4 = np.round(x4, sigfig)
+        x5 = np.round(x5, sigfig)
 
         PLOT_VAR_NAMES = np.arange(5) + 1
         PLOT_VAR_IDXS = np.arange(5)
@@ -1050,8 +1294,172 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         INV_SCALER = dset.reverse_scaling
         SCALER = dset.apply_scaling
         NULL_VAL = None
+    elif config.dset == "q_s1ar":
+        m=0
+        sigfig = 2
+        fs = 2048  # Sampling rate (Hz)
+        T = 150  # Length of epochs (s)
 
+        # Set the seed for reproducibility
+        np.random.seed(42)
 
+        # Define the number of iterations for the simulation
+        n_iterations = fs * T
+        # Preallocate the arrays for the x variables
+        x1 = np.zeros(n_iterations)
+        x2 = np.zeros(n_iterations)
+        x3 = np.zeros(n_iterations)
+        x4 = np.zeros(n_iterations)
+        x5 = np.zeros(n_iterations)
+
+        # Define the rate lambda for the exponential distribution
+        lambda_rate = 2
+
+        # Generate the noise processes e1t, e2t, e3t, e4t, e5t
+        # e1 = np.random.exponential(scale=1 / lambda_rate, size=n_iterations)
+        # e2 = chi2.rvs(df=1, size=n_iterations)
+        e1 = norm.rvs(scale=1, size=n_iterations)
+        e2 = norm.rvs(scale=1, size=n_iterations)
+        e3 = norm.rvs(scale=1, size=n_iterations) *m # Gaussian with mean 0, std 1
+        e4 = norm.rvs(scale=1, size=n_iterations) *m # Gaussian with mean 0, std 1
+        e5 = norm.rvs(scale=1, size=n_iterations) *m# Gaussian with mean 0, std 1
+
+        e1 = np.round(e1, sigfig)
+        e2 = np.round(e2, sigfig)
+        e3 = np.round(e3, sigfig)
+        e4 = np.round(e4, sigfig)
+        e5 = np.round(e5, sigfig)
+
+        for t in range(6, n_iterations):
+            x1[t] = 0.05 * x1[t-5] - 0.15 * x1[t-4] + 0.25 * x1[t-3] - 0.35 * x1[t-2] + 0.45 * x1[t-1] + e1[t]
+            x2[t] = - 0.01 * x2[t-6] + .09 * x2[t-5] - 0.2 * x2[t-4] + .27 * x2[t-3] - 0.35 * x2[t-2] + .4 * x2[t-1] + e2[t]
+            x3[t] = 0.8 * x2[t] + e3[t]
+            x4[t] = 0.7 * x1[t] * (math.pow(x1[t], 2) - 1) * np.exp((-math.pow(x1[t], 2)) / 2) + e4[t]
+            x5[t] = 0.3 * x2[t] + 0.05 * math.pow(x2[t], 2) + e5[t]
+
+        x3 = np.round(x3, sigfig)
+        x4 = np.round(x4, sigfig)
+        x5 = np.round(x5, sigfig)
+
+        PLOT_VAR_NAMES = np.arange(5) + 1
+        PLOT_VAR_IDXS = np.arange(5)
+
+        data = np.array([x1, x2, x3, x4, x5]).T
+        data= data[100:]
+        df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="s")
+
+        dset = stf.data.CSVTimeSeries(
+            data_path=None,
+            raw_df=df,
+            val_split=0.1,
+            test_split=0.1,
+            normalize=True,
+            time_col_name="Datetime",
+            time_features=["hour", 'minute', 'second'],
+        )
+        yc_dim = data.shape[1]
+        yt_dim = data.shape[1]
+        x_dim = dset.time_cols.shape[0]
+
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
+    elif config.dset == "q_s2ar":
+        m=0
+        sigfig = 2
+        fs = 2048  # Sampling rate (Hz)
+        T = 150  # Length of epochs (s)
+
+        # Set the seed for reproducibility
+        np.random.seed(42)
+
+        # Define the number of iterations for the simulation
+        n_iterations = fs * T
+        # Preallocate the arrays for the x variables
+        x1 = np.zeros(n_iterations)
+        x2 = np.zeros(n_iterations)
+        x3 = np.zeros(n_iterations)
+        x4 = np.zeros(n_iterations)
+        x5 = np.zeros(n_iterations)
+
+        # Define the rate lambda for the exponential distribution
+        lambda_rate = 2
+
+        # Generate the noise processes e1t, e2t, e3t, e4t, e5t
+        # e1 = np.random.exponential(scale=1 / lambda_rate, size=n_iterations)
+        # e2 = chi2.rvs(df=1, size=n_iterations)
+        e1 = norm.rvs(scale=1, size=n_iterations)
+        e2 = norm.rvs(scale=1, size=n_iterations)
+        e3 = norm.rvs(scale=1, size=n_iterations) *m # Gaussian with mean 0, std 1
+        e4 = norm.rvs(scale=1, size=n_iterations) *m # Gaussian with mean 0, std 1
+        e5 = norm.rvs(scale=1, size=n_iterations) *m# Gaussian with mean 0, std 1
+
+        e1 = np.round(e1, sigfig)
+        e2 = np.round(e2, sigfig)
+        e3 = np.round(e3, sigfig)
+        e4 = np.round(e4, sigfig)
+        e5 = np.round(e5, sigfig)
+
+        for t in range(6, n_iterations):
+            x1[t] = 0.05 * x1[t-5] - 0.15 * x1[t-4] + 0.25 * x1[t-3] - 0.35 * x1[t-2] + 0.45 * x1[t-1] + e1[t]
+            x2[t] = - 0.01 * x2[t-6] + .09 * x2[t-5] - 0.2 * x2[t-4] + .27 * x2[t-3] - 0.35 * x2[t-2] + .4 * x2[t-1] + e2[t]
+            x3[t] = 0.8 * x2[t] + e3[t]
+            x4[t] = 0.7 * x1[t] * (math.pow(x1[t], 2) - 1) * np.exp((-math.pow(x1[t], 2)) / 2) + e4[t]
+            x5[t] = 0.3 * x2[t] + 0.05 * math.pow(x2[t], 2) + e5[t]
+
+        x3 = np.round(x3, sigfig)
+        x4 = np.round(x4, sigfig)
+        x5 = np.round(x5, sigfig)
+
+        PLOT_VAR_NAMES = np.arange(5) + 1
+        PLOT_VAR_IDXS = np.arange(5)
+
+        data = np.array([x1, x2, x3, x4, x5]).T
+        data= data[100:]
+        df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="s")
+
+        dset = stf.data.CSVTimeSeries(
+            data_path=None,
+            raw_df=df,
+            val_split=0.1,
+            test_split=0.1,
+            normalize=True,
+            time_col_name="Datetime",
+            time_features=["hour", 'minute', 'second'],
+        )
+        yc_dim = data.shape[1]
+        yt_dim = data.shape[1]
+        x_dim = dset.time_cols.shape[0]
+
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
     elif config.dset == "time_dep_S2":
 
         error_scale = config.scaling_factor

@@ -2,7 +2,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 import os
 
-dry_run = False
+dry_run = True
 
 # Default parameters for the command
 default_params = {
@@ -122,16 +122,35 @@ if __name__ == "__main__":
     # (s1, 'E_S1_1_m0', 3, { "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
     # (s1, 'E_S1_2_m0', 3, { "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
     # ]
-    commands = [
+    # commands = [
 
-    ('temp', 'F_S1_m0', 0, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
-    ('temp', 'F_S1_1_m0', 1, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
-    ('temp', 'F_S1_2_m0', 2, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
-    (s1, 'H_S1_m0', 0, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
-    (s1, 'H_S1_1_m0', 1, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
-    (s1, 'H_S1_2_m0', 2, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
-    ]
+    # ('temp', 'F_S1_m0', 0, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
+    # ('temp', 'F_S1_1_m0', 1, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
+    # ('temp', 'F_S1_2_m0', 2, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
+    # (s1, 'H_S1_m0', 0, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
+    # (s1, 'H_S1_1_m0', 1, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
+    # (s1, 'H_S1_2_m0', 2, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 100, "l2_coeff": 1e-4, 'max_epochs': 100, 'no_earlystopping': False}),
     # ]
+
+    # s1 = 'eeg_with_s1'
+    # designation = 'c'
+    # commands = []
+    # gpu = 0
+    # for i in range(10):
+    #     commands.append(
+    #         (s1, f"{designation}_{i}_m3", gpu, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 20, 'dropout_ff': .2, "dropout_emb": .2, 'max_epochs': 150, 'no_earlystopping': False, }))
+    #     gpu = (gpu + 1) % 4 # 4 is the number of gpus
+    # commands = commands[:2] # select the first 2 commands
+        
+    s1 = 'eeg_with_s2'
+    designation = 'd'
+    commands = []
+    gpu = 0
+    for i in range(10):
+        commands.append(
+            (s1, f"{designation}_{i}_m3", gpu, {'base_lr': 5e-4,"init_lr": 1e-10, "warmup_steps": 20, 'dropout_ff': .2, "dropout_emb": .2, 'max_epochs': 150, 'no_earlystopping': False, }))
+        gpu = (gpu + 1) % 4 # 4 is the number of gpus
+
 
     # Group commands by GPU
     commands_by_gpu = {}

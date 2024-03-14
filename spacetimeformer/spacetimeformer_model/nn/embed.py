@@ -193,6 +193,13 @@ class Embedding(nn.Module):
         y = Flatten(y)
         mask = self.make_mask(y)
 
+        # [160, 3] 
+        # [160, 1]
+
+        # # time emb  + local emb + global emb
+        # [160, 4]       
+
+
         # concat (time_emb, y) --> FF --> val_time_emb
         val_time_inp = torch.cat((time_emb, y), dim=-1)
         val_time_emb = self.val_time_emb(val_time_inp)
