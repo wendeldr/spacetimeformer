@@ -15,6 +15,7 @@ import pytorch_lightning as pl
 import torch
 
 import spacetimeformer as stf
+import itertools
 
 
 @contextmanager
@@ -69,7 +70,8 @@ _DSETS = [
     "q_s1",
     "q_s1ar",
     "eeg_with_s1",
-    "eeg_with_s2"
+    "eeg_with_s2",
+    "understanding"
 ]
 
 
@@ -668,6 +670,130 @@ def create_dset(config, x_dim=None, yc_dim=None, yt_dim=None):
         NULL_VAL = None
         PLOT_VAR_NAMES = ["OT", "p (mbar)", "raining (s)"]
         PLOT_VAR_IDXS = [20, 0, 15]
+
+    elif config.dset == "understanding":
+        size = 1000
+        x1  = np.zeros(size)
+        x2  = np.zeros(size)
+        x3  = np.zeros(size)
+        x4  = np.zeros(size)
+        x5  = np.zeros(size)
+
+        x1_seq = np.array([1,2,3])
+
+        # embed sequence randomly several times in  x1. overlap is ok.
+        for i in random.sample(range(0, len(x1)-len(x1_seq)), 75):
+            x1[i:i+len(x1_seq)] = x1_seq
+
+        # Define the numbers and the maximum length of the noise sequences
+        numbers = [0, 1, 2, 3]
+        max_length = 3
+
+        # Generate all possible sequences of lengths 1 to max_length
+        all_sequences = [seq for i in range(1, max_length + 1) for seq in itertools.product(numbers, repeat=i)]
+
+        # Convert to numpy arrays and filter out the (1, 2, 3) sequence
+        noise_sequences = [np.array(seq) for seq in all_sequences if seq != (1, 2, 3)]
+
+        # Number of times to embed noise
+        num_noise_embeddings = 50
+
+        # Randomly embed noise sequences
+        for _ in range(num_noise_embeddings):
+            # Choose a random noise sequence
+            noise_seq = random.choice(noise_sequences)
+            # Choose a random start position; overlap is ok
+            start_pos = random.randint(0, len(x1) - len(noise_seq))
+            # Embed the noise sequence
+            x1[start_pos:start_pos+len(noise_seq)] = noise_seq
+
+        #### X2 ####
+        # x2 responds to x1 and has the unique value of 5.  The response is 2 indexs after x1 produces 1,2,3. 
+        responsetime = 2
+        for i in range(len(x1) - (len(x1_seq) + responsetime)):
+            if np.array_equal(x1[i:i+len(x1_seq)], x1_seq):
+                s = i + len(x1_seq) + responsetime # start at the end of the sequence and add the response time
+                x2[s] = 5
+
+        #### X3 ####
+        # second source
+        x3_seq = np.array([4, 3, 2])
+
+        # Embed x3_seq randomly in x3, allowing overlaps.
+        for i in random.sample(range(0, len(x3) - len(x3_seq)), 75):
+            x3[i:i+len(x3_seq)] = x3_seq
+
+        # Generate noise for x3, similar to x1, excluding the sequence [4, 3, 2].
+        numbers = [0, 1, 2, 3, 4]  # Including 4 since it's part of x3's unique sequence.
+        max_length = 3
+        all_sequences = [seq for i in range(1, max_length + 1) for seq in itertools.product(numbers, repeat=i)]
+        noise_sequences = [np.array(seq) for seq in all_sequences if seq != tuple(x3_seq)]
+        num_noise_embeddings = 50
+
+        for _ in range(num_noise_embeddings):
+            noise_seq = random.choice(noise_sequences)
+            start_pos = random.randint(0, len(x3) - len(noise_seq))
+            x3[start_pos:start_pos+len(noise_seq)] = noise_seq
+
+        #### X4 ####
+        # x4 responds to x3 with the sequence [3, -3] two indices after [4, 3, 2].
+        responsetime = 5
+        for i in range(len(x3) - (len(x3_seq) + responsetime+1)):
+            if np.array_equal(x3[i:i+len(x3_seq)], x3_seq):
+                s = i + len(x3_seq) + responsetime # start at the end of the sequence and add the response time
+                x4[s] = 3
+                x4[s+1] = -3
+
+        #### X5 ####
+        # x5 responds in a non-linear manner. Example: Quadratic function pattern.
+        # Choose arbitrary a, b, c for the quadratic equation: ax^2 + bx + c
+        a, b, c = 1, -1, 1  # Example values.
+        for i in range(len(x3) - 2):
+            if np.array_equal(x3[i:i+3], x3_seq):
+                # Apply a non-linear response starting two indices after the sequence.
+                for j in range(3):
+                    x = j  # x is the index relative to the start of the response.
+                    x5[i + 2 + j] = a*x**2 + b*x + c  # This will set 3 values in a non-linear pattern.
+                    # Ensure this doesn't exceed the array bounds.
+                    if i + 2 + j >= size:
+                        break
+        PLOT_VAR_NAMES = np.arange(5) + 1
+        PLOT_VAR_IDXS = np.arange(5)
+
+        data = np.array([x1, x2, x3, x4, x5]).T
+
+        df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
+        df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="s")
+
+        dset = stf.data.CSVTimeSeries(
+            data_path=None,
+            raw_df=df,
+            val_split=0.1,
+            test_split=0.1,
+            normalize=True,
+            time_col_name="Datetime",
+            time_features=["second", 'millisecond', 'microsecond'],
+        )
+        yc_dim = data.shape[1]
+        yt_dim = data.shape[1]
+        x_dim = dset.time_cols.shape[0]
+
+        DATA_MODULE = stf.data.DataModule(
+            datasetCls=stf.data.CSVTorchDset,
+            dataset_kwargs={
+                "csv_time_series": dset,
+                "context_points": config.context_points,
+                "target_points": config.target_points,
+                "time_resolution": config.time_resolution,
+            },
+            batch_size=config.batch_size,
+            workers=config.workers,
+            overfit=args.overfit,
+        )
+        INV_SCALER = dset.reverse_scaling
+        SCALER = dset.apply_scaling
+        NULL_VAL = None
+
 
     elif config.dset == "eeg":
         dset = stf.data.CSVTimeSeries(

@@ -2,28 +2,31 @@ import argparse
 import multiprocessing
 import wandb
 
-
-
 import numpy as np
 import pandas as pd
 import spacetimeformer as stf
 from pytorch_lightning.loggers import WandbLogger
 import pytorch_lightning as pl
 import torch
+import itertools
+import random
+
+from pytorch_lightning import Trainer, seed_everything
+seed_everything(42, workers=True)
 
 
 default_config = {
     # fixed but maybe change...
-    'batch_size':100,
-    'workers':1,
+    'batch_size':2000,
+    'workers':2,
     'init_lr':1e-10,
     'base_lr':0.0005,
     'context_points':10,
     'target_points':1,
-    'd_model':15,
+    'd_model':25,
     'd_qk':15,
     'd_v':15,
-    'd_ff':60,
+    'd_ff':100,
     'n_heads':1,
     'enc_layers':1,
     'dec_layers':1,
@@ -47,7 +50,7 @@ default_config = {
     "dropout_attn_out": 0,
     "dropout_attn_matrix": 0,
     "dropout_qkv": 0,
-    "dropout_ff": 0.3,
+    "dropout_ff": 0.2,
     "pos_emb_type": 'abs',
     "no_final_norm": False,
     "performer_kernel": 'relu',
@@ -56,7 +59,7 @@ default_config = {
     "use_shifted_time_windows": False,
     "norm": 'batch',
     "activation": 'gelu',
-    "warmup_steps": 0,
+    "warmup_steps": 10,
     "decay_factor": 0.25,
     "initial_downsample_convs": 0,
     "intermediate_downsample_convs": 0,
@@ -65,7 +68,7 @@ default_config = {
     "loss": 'mse',
     "class_loss_imp": 0.1,
     "recon_loss_imp": 0,
-    "time_emb_dim": 3,
+    "time_emb_dim": 6,
     "null_value": None,
     "pad_value": None,
     "linear_window": 0,
@@ -78,19 +81,105 @@ default_config = {
     "recon_mask_drop_standard": 0.1,
     "recon_mask_drop_full": 0.05,
 }
+
 sweep_config = {
-    'method': 'random', #grid, random
+    'method': 'random',  # Choose 'random' to randomly select values, other options include 'grid' for exhaustive search
     'parameters': {
-        'base_lr':   {'distribution': 'log_uniform_values', 'min': 1e-10, 'max': 0.01},
+        'base_lr': {
+            'distribution': 'log_uniform',
+            'min': -10,  # Use log scale, corresponds to 10^-10
+            'max': -2,   # Use log scale, corresponds to 10^-2
+        },
     },
-    # only for bayes sweeps
     'metric': {
-        'goal': 'minimize',
-        'name': 'val/smape'
+        'goal': 'minimize',  # Assuming you want to minimize the validation metric, adjust as necessary
+        'name': 'val/forecast_loss'  # Replace 'val/smape' with the actual metric name you are using for evaluation
     },
 }
 
 def create_dataset(config):
+    seed_everything(42, workers=True)
+
+    size = 1000
+    # np.random.seed(42)
+    # random.seed(42)
+    x1  = np.zeros(size)
+    x2  = np.zeros(size)
+    x3  = np.zeros(size)
+    x4  = np.zeros(size)
+    x5  = np.zeros(size)
+
+    x1_seq = np.array([1,2,3])
+
+    # embed sequence randomly several times in  x1. overlap is ok.
+    for i in random.sample(range(0, len(x1)-len(x1_seq)), 75):
+        x1[i:i+len(x1_seq)] = x1_seq
+
+    # Define the numbers and the maximum length of the noise sequences
+    numbers = [0, 1, 2, 3]
+    max_length = 3
+
+    # Generate all possible sequences of lengths 1 to max_length
+    all_sequences = [seq for i in range(1, max_length + 1) for seq in itertools.product(numbers, repeat=i)]
+
+    # Convert to numpy arrays and filter out the (1, 2, 3) sequence
+    noise_sequences = [np.array(seq) for seq in all_sequences if seq != (1, 2, 3)]
+
+    # Number of times to embed noise
+    num_noise_embeddings = 50
+
+    # Randomly embed noise sequences
+    for _ in range(num_noise_embeddings):
+        # Choose a random noise sequence
+        noise_seq = random.choice(noise_sequences)
+        # Choose a random start position; overlap is ok
+        start_pos = random.randint(0, len(x1) - len(noise_seq))
+        # Embed the noise sequence
+        x1[start_pos:start_pos+len(noise_seq)] = noise_seq
+
+    #### X2 ####
+    # x2 responds to x1 and has the unique value of 5.  The response is 2 indexs after x1 produces 1,2,3. 
+    responsetime = 2
+    for i in range(len(x1) - (len(x1_seq) + responsetime)):
+        if np.array_equal(x1[i:i+len(x1_seq)], x1_seq):
+            s = i + len(x1_seq) + responsetime # start at the end of the sequence and add the response time
+            x2[s] = 5
+
+    #### X3 ####
+    # second source
+    x3_seq = np.array([4, 3, 2])
+
+    # Embed x3_seq randomly in x3, allowing overlaps.
+    for i in random.sample(range(0, len(x3) - len(x3_seq)), 75):
+        x3[i:i+len(x3_seq)] = x3_seq
+
+    # Generate noise for x3, similar to x1, excluding the sequence [4, 3, 2].
+    numbers = [0, 1, 2, 3, 4]  # Including 4 since it's part of x3's unique sequence.
+    max_length = 3
+    all_sequences = [seq for i in range(1, max_length + 1) for seq in itertools.product(numbers, repeat=i)]
+    noise_sequences = [np.array(seq) for seq in all_sequences if seq != tuple(x3_seq)]
+    num_noise_embeddings = 50
+
+    for _ in range(num_noise_embeddings):
+        noise_seq = random.choice(noise_sequences)
+        start_pos = random.randint(0, len(x3) - len(noise_seq))
+        x3[start_pos:start_pos+len(noise_seq)] = noise_seq
+
+    #### X4 ####
+    # x4 responds to x3 with the sequence [3, -3] two indices after [4, 3, 2].
+    responsetime = 5
+    for i in range(len(x3) - (len(x3_seq) + responsetime+1)):
+        if np.array_equal(x3[i:i+len(x3_seq)], x3_seq):
+            s = i + len(x3_seq) + responsetime # start at the end of the sequence and add the response time
+            x4[s] = 3
+            x4[s+1] = -3
+
+    #### X5 ####
+    # x5 is abs inverted x3
+    x5 = np.abs(-x3)
+
+    data = np.array([x1, x2, x3, x4, x5]).T
+
     INV_SCALER = lambda x: x
     SCALER = lambda x: x
     NULL_VAL = None
@@ -98,59 +187,19 @@ def create_dataset(config):
     PLOT_VAR_NAMES = None
     PAD_VAL = None
 
-    fs = 2048  # Sampling rate (Hz)
-    T = 10  # Length of epochs (s)
-    f = 100  # Frequency of sinusoids (Hz)
-    t = np.arange(0, T, 1 / fs)  # Time array
-    A = 1  # Amplitude
-    sigma = 0.1  # Gaussian noise variance
-
-    # Damping/growth factor
-    k = 4
-
-    # Number of repetitions
-    N = 6  # Replace with desired number of repetitions
-
-    # Initializing the data array
-    data = []
-
-    # Phase differences for the sine waves
-    phase_differences = [0, np.pi]
-    names = ['0 (0°)', 'π (180°)']
-
-    # Time variable for the repeating dampened wave
-    repeating_t = t % (T / N)
-
-    # Append dampened sine wave (repeating)
-    dampened_wave = A * np.exp(-k * repeating_t) * np.sin(2 * np.pi * f * repeating_t)
-    data.append(dampened_wave)
-
-    # Append standard and phase-shifted sine waves
-    for ps in phase_differences:
-        # Create the sine wave with phase shift
-        sig = A*np.sin(2 * np.pi * f * t - ps)
-        data.append(sig)
-
-    data = np.array(data).T
-    # Update names for the new waves
-    names.insert(0, "Dampened")
-
-    PLOT_VAR_NAMES = names
-    PLOT_VAR_IDXS = np.arange(0, len(names))
-
+    PLOT_VAR_NAMES = np.arange(5) + 1
+    PLOT_VAR_IDXS = np.arange(5)
     df = pd.DataFrame(data, columns=PLOT_VAR_NAMES)
-    df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="ms")
+    df["Datetime"] = pd.date_range(start="1/1/2020", periods=df.shape[0], freq="s")
 
     dset = stf.data.CSVTimeSeries(
         data_path=None,
         raw_df=df,
-        target_cols=PLOT_VAR_NAMES,
-        ignore_cols=[],
-        val_split=0.2,
-        test_split=0.2,
-        normalize=False,
+        val_split=0.1,
+        test_split=0.1,
+        normalize=True,
         time_col_name="Datetime",
-        time_features=["millisecond"],
+        time_features=["second", 'millisecond', 'microsecond'],
     )
     yc_dim = data.shape[1]
     yt_dim = data.shape[1]
@@ -171,6 +220,9 @@ def create_dataset(config):
     INV_SCALER = dset.reverse_scaling
     SCALER = dset.apply_scaling
     NULL_VAL = None
+    INV_SCALER = dset.reverse_scaling
+    SCALER = dset.apply_scaling
+    NULL_VAL = None
     return (
         DATA_MODULE,
         INV_SCALER,
@@ -185,6 +237,7 @@ def create_dataset(config):
     )
 
 def create_model(config, x_dim, yc_dim, yt_dim):
+    seed_everything(42, workers=True)
     max_seq_len = config['context_points'] + config['target_points']
 
     forecaster = stf.spacetimeformer_model.Spacetimeformer_Forecaster(
@@ -248,15 +301,9 @@ def create_model(config, x_dim, yc_dim, yt_dim):
     )
     return forecaster
 
-def set_seed(seed=42):
-    torch.manual_seed(seed)
-    # If you are using CUDA
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)  # for multi-GPU
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 def train(config=None):
+    seed_everything(42, workers=True)
     with wandb.init(config=config,project="sweep"):
         # If called by wandb.agent, as below,
         # this config will be set by Sweep Controller
@@ -267,7 +314,6 @@ def train(config=None):
             if key not in config:
                 config[key] = default_config[key]
 
-        set_seed(42)
         (data_module,
         inv_scaler,
         scaler,
@@ -284,137 +330,146 @@ def train(config=None):
         forecaster.set_scaler(scaler)
         forecaster.set_null_value(null_val)
 
-
-
         wandb_logger = WandbLogger()
     
         trainer = pl.Trainer(
-            gpus=config.gpus,
-            logger=wandb_logger,
-            strategy=config.strategy,
-            accelerator=config.strategy,
-            gradient_clip_val=0,
-            gradient_clip_algorithm="norm",
-            overfit_batches=0,
-            accumulate_grad_batches=1,
-            sync_batchnorm=False,
-            limit_val_batches=1,
-            max_epochs=10,
+            gpus=config.gpus, # which gpus to use
+            logger=wandb_logger, # W&B integration
+            strategy=config.strategy, # DataParallel (dp) or DDP
+            callbacks=[pl.callbacks.LearningRateMonitor()], # various callbacks
+            deterministic=True, # reproducibility
+            # accumulate_grad_batches=1, # number of batches to accumulate gradients. batch_size * accumulate_grad_batches = actual batch size
+            # gradient_clip_val=0,  # control gradient clipping. 0 means don't clip.
+            # gradient_clip_algorithm="norm",
+            # overfit_batches=0,
+            # sync_batchnorm=False, # we use batch norm but we are not running across gpus so we don't need to sync I think. Default is true though so try without
+            # limit_val_batches=1,
+            max_epochs=25,
             log_every_n_steps=1,
             val_check_interval=1,
-            callbacks=[pl.callbacks.LearningRateMonitor()],
-            deterministic=True,
+
         )
 
         # Train
         trainer.fit(forecaster, datamodule=data_module)
 
+        # Test
+        trainer.test(datamodule=data_module, ckpt_path="best")
 
-def train_nowand(config=default_config):   
-    # place values from default_config into config if not already set
-    for key in default_config:
-        if key not in config:
-            config[key] = default_config[key]
+        wandb_logger.finalize("success")
 
-    set_seed(42)
-    (data_module,
-    inv_scaler,
-    scaler,
-    null_val,
-    plot_var_idxs,
-    plot_var_names,
-    pad_val,
-    x_dim,
-    yc_dim,
-    yt_dim) = create_dataset(config)
 
-    forecaster = create_model(config, x_dim=x_dim, yc_dim=yc_dim, yt_dim=yt_dim)
-    forecaster.eval()
 
-    cp = config['context_points']
-    tp = config['target_points']
-    N_batch = config['batch_size']
-    N_time_representations = 1
+# def train_nowand(config=default_config):   
+#     # place values from default_config into config if not already set
+#     for key in default_config:
+#         if key not in config:
+#             config[key] = default_config[key]
 
-    # test_samples = next(iter(data_module.test_dataloader()))
-    # for x in test_samples:
-    #     print(x.shape)
+#     (data_module,
+#     inv_scaler,
+#     scaler,
+#     null_val,
+#     plot_var_idxs,
+#     plot_var_names,
+#     pad_val,
+#     x_dim,
+#     yc_dim,
+#     yt_dim) = create_dataset(config)
 
-     # x_c, y_c, x_t, y_t,
-    forecaster(torch.randn(N_batch, cp, N_time_representations),
-               torch.randn(N_batch, cp, yc_dim),
-               torch.randn(N_batch, tp, N_time_representations),
-               torch.randn(N_batch, tp, yc_dim))
+#     forecaster = create_model(config, x_dim=x_dim, yc_dim=yc_dim, yt_dim=yt_dim)
+#     forecaster.eval()
 
-    # torch.onnx.export(forecaster,
-    #                   # x_c, y_c, x_t, y_t,
-    #              (torch.randn(1, cp, 1),torch.randn(1, cp, yc_dim),torch.randn(1, tp, 1),torch.randn(1, tp, yc_dim)),
-    #              "stf.onnx",
-    #              verbose=False,
-    #              export_params=True,
-    #              )
+#     cp = config['context_points']
+#     tp = config['target_points']
+#     N_batch = config['batch_size']
+#     N_time_representations = 1
+
+#     # test_samples = next(iter(data_module.test_dataloader()))
+#     # for x in test_samples:
+#     #     print(x.shape)
+
+#      # x_c, y_c, x_t, y_t,
+#     # forecaster(torch.randn(N_batch, cp, N_time_representations),
+#     #            torch.randn(N_batch, cp, yc_dim),
+#     #            torch.randn(N_batch, tp, N_time_representations),
+#     #            torch.randn(N_batch, tp, yc_dim))
+
+#     # torch.onnx.export(forecaster,
+#     #                   # x_c, y_c, x_t, y_t,
+#     #              (torch.randn(1, cp, 1),torch.randn(1, cp, yc_dim),torch.randn(1, tp, 1),torch.randn(1, tp, yc_dim)),
+#     #              "stf.onnx",
+#     #              verbose=False,
+#     #              export_params=True,
+#     #              )
     
-    forecaster.set_inv_scaler(inv_scaler)
-    forecaster.set_scaler(scaler)
-    forecaster.set_null_value(null_val)
+#     forecaster.set_inv_scaler(inv_scaler)
+#     forecaster.set_scaler(scaler)
+#     forecaster.set_null_value(null_val)
 
-    trainer = pl.Trainer(
-        gpus=config.gpus,
-        strategy=config.strategy,
-        accelerator=config.strategy,
-        gradient_clip_val=0,
-        gradient_clip_algorithm="norm",
-        overfit_batches=0,
-        accumulate_grad_batches=1,
-        sync_batchnorm=False,
-        limit_val_batches=1,
-        max_epochs=10,
-        log_every_n_steps=1,
-        val_check_interval=1,
-        callbacks=[pl.callbacks.LearningRateMonitor()],
-        deterministic=True,
-    )
+#     trainer = pl.Trainer(
+#         gpus=config['gpus'],
+#         strategy=config['strategy'],
+#         accelerator=config['strategy'],
+#         gradient_clip_val=0,
+#         gradient_clip_algorithm="norm",
+#         overfit_batches=0,
+#         accumulate_grad_batches=1,
+#         sync_batchnorm=False,
+#         limit_val_batches=1,
+#         max_epochs=15,
+#         log_every_n_steps=1,
+#         val_check_interval=1,
+#         callbacks=[pl.callbacks.LearningRateMonitor()],
+#         deterministic=True,
+#     )
 
-    # Train
-    trainer.fit(forecaster, datamodule=data_module)
+#     # Train
+#     trainer.fit(forecaster, datamodule=data_module)
+#     trainer.test(datamodule=data_module, ckpt_path="best")
 
-train_nowand()
-
-
-def run_agent(sweep_id,run_count=1):
-    wandb.agent(sweep_id=sweep_id, function=train, count=run_count)
+# train_nowand()
 
 
+def run_gpu_agent(sweep_id, gpu_id, run_count=None):
+    # default run count of none lets agent run until no more runs are available. Since each agent is a process, this will run until all runs are complete.
+    seed_everything(42, workers=True)
+
+    def train_with_specific_gpu():
+        seed_everything(42, workers=True)
+        # Initialize or update the configuration with the specific GPU to use
+        # Ensure 'config' is accessible and modifiable here, possibly passed as an argument or global
+        modified_config = default_config.copy()
+        modified_config['gpus'] = [gpu_id]  # Set to use a specific GPU
+
+        # Call the original training function with the updated configuration
+        train(config=modified_config)
+
+    # Start a W&B agent with the modified training function
+    wandb.agent(sweep_id=sweep_id, function=train_with_specific_gpu, count=run_count)
 
 
-# if __name__ == "__main__":
-#     set_seed(42)
-    # wandb.login()
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument('project', type=str)
-#     parser.add_argument('--agent_count', type=int, default=1)
-#     parser.add_argument('--run_count', type=int, default=1)
+if __name__ == "__main__":
+    seed_everything(42, workers=True)
+    wandb.login()
+    project = 'learning_rate_sweep'
+    sweep_id = wandb.sweep(sweep_config, project=project)
 
-#     args = parser.parse_args()
+    # Number of GPUs available
+    avaiable_gpus = [0, 1, 2, 3]
+    agents_per_gpu = 8
 
-#     project= args.project
-#     count = args.agent_count
-#     run_count = args.run_count
-#     # project = "baselr_sweep"
-#     # count = 1
+    # Create a process for each GPU
+    processes = []
+    for gpu_id in avaiable_gpus:
+        for agent_id in range(agents_per_gpu):
+            p = multiprocessing.Process(target=run_gpu_agent, args=(sweep_id, gpu_id, None))
+            p.start()
+            processes.append(p)
 
-#     sweep_id = wandb.sweep(sweep_config, project=project)
-
-#     processes = []
-#     for i in range(count):
-#         # Create a separate process for each agent
-#         p = multiprocessing.Process(target=run_agent, args=(sweep_id,run_count))
-#         processes.append(p)
-#         p.start()
-
-#     # Wait for all processes to complete
-#     for p in processes:
-#         p.join()
+    # Wait for all processes to finish
+    for p in processes:
+        p.join()
 
 
 
